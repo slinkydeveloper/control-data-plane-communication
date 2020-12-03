@@ -15,10 +15,10 @@ limitations under the License.
 package main
 
 import (
+	myadapter "knative.dev/control-data-plane-communication/pkg/adapter"
 	"knative.dev/eventing/pkg/adapter/v2"
-	myadapter "knative.dev/sample-source/pkg/adapter"
 )
 
 func main() {
-	adapter.Main("sample-source", myadapter.NewEnv, myadapter.NewAdapter)
+	adapter.Main("control-data-plane-communication", myadapter.NewEnv, myadapter.NewAdapter)
 }

@@ -15,7 +15,7 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: sample-source-webhook
+  name: control-data-plane-communication-webhook
   namespace: knative-samples
   labels:
     samples.knative.dev/release: devel
@@ -23,8 +23,8 @@ spec:
   replicas: 1
   selector:
     matchLabels: &labels
-      app: sample-source-webhook
-      role: sample-source-webhook
+      app: control-data-plane-communication-webhook
+      role: control-data-plane-communication-webhook
   template:
     metadata:
       labels: *labels
@@ -36,15 +36,15 @@ spec:
           - podAffinityTerm:
               labelSelector:
                 matchLabels:
-                  app: sample-source-webhook
+                  app: control-data-plane-communication-webhook
               topologyKey: kubernetes.io/hostname
             weight: 100
 
-      serviceAccountName: sample-source-webhook
+      serviceAccountName: control-data-plane-communication-webhook
       containers:
         - name: samplesource-webhook
           terminationMessagePolicy: FallbackToLogsOnError
-          image: ko://knative.dev/sample-source/cmd/webhook
+          image: ko://knative.dev/control-data-plane-communication/cmd/webhook
           env:
           - name: SYSTEM_NAMESPACE
             valueFrom:
@@ -76,8 +76,8 @@ kind: Service
 metadata:
   labels:
     samples.knative.dev/release: devel
-    role: sample-source-webhook
-  name: sample-source-webhook
+    role: control-data-plane-communication-webhook
+  name: control-data-plane-communication-webhook
   namespace: knative-samples
 spec:
   ports:
@@ -85,4 +85,4 @@ spec:
       port: 443
       targetPort: 8443
   selector:
-    role: sample-source-webhook
+    role: control-data-plane-communication-webhook

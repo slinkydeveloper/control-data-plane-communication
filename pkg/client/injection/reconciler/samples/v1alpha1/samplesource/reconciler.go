@@ -33,13 +33,13 @@ import (
 	types "k8s.io/apimachinery/pkg/types"
 	sets "k8s.io/apimachinery/pkg/util/sets"
 	record "k8s.io/client-go/tools/record"
+	v1alpha1 "knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
+	versioned "knative.dev/control-data-plane-communication/pkg/client/clientset/versioned"
+	samplesv1alpha1 "knative.dev/control-data-plane-communication/pkg/client/listers/samples/v1alpha1"
 	controller "knative.dev/pkg/controller"
 	kmp "knative.dev/pkg/kmp"
 	logging "knative.dev/pkg/logging"
 	reconciler "knative.dev/pkg/reconciler"
-	v1alpha1 "knative.dev/sample-source/pkg/apis/samples/v1alpha1"
-	versioned "knative.dev/sample-source/pkg/client/clientset/versioned"
-	samplesv1alpha1 "knative.dev/sample-source/pkg/client/listers/samples/v1alpha1"
 )
 
 // Interface defines the strongly typed interfaces to be implemented by a

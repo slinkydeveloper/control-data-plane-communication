@@ -17,6 +17,7 @@ package adapter
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
@@ -38,9 +39,11 @@ func NewEnv() adapter.EnvConfigAccessor { return &envConfig{} }
 
 // Adapter generates events at a regular interval.
 type Adapter struct {
-	client   cloudevents.Client
-	interval time.Duration
-	logger   *zap.SugaredLogger
+	client cloudevents.Client
+	logger *zap.SugaredLogger
+
+	intervalMutex sync.Mutex
+	interval      time.Duration
 
 	nextID int
 }
@@ -68,10 +71,17 @@ func (a *Adapter) newEvent() cloudevents.Event {
 // Start runs the adapter.
 // Returns if ctx is cancelled or Send() returns an error.
 func (a *Adapter) Start(ctx context.Context) error {
+	// Start control server
+
+	a.intervalMutex.Lock()
 	a.logger.Infow("Starting heartbeat", zap.String("interval", a.interval.String()))
+	a.intervalMutex.Unlock()
 	for {
+		a.intervalMutex.Lock()
+		interval := a.interval
+		a.intervalMutex.Unlock()
 		select {
-		case <-time.After(a.interval):
+		case <-time.After(interval):
 			event := a.newEvent()
 			a.logger.Infow("Sending new event", zap.String("event", event.String()))
 			if result := a.client.Send(context.Background(), event); !cloudevents.IsACK(result) {

@@ -31,10 +31,10 @@ import (
 	sourcesv1 "knative.dev/eventing/pkg/apis/sources/v1"
 	reconcilersource "knative.dev/eventing/pkg/reconciler/source"
 
-	"knative.dev/sample-source/pkg/apis/samples/v1alpha1"
-	reconcilersamplesource "knative.dev/sample-source/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
-	"knative.dev/sample-source/pkg/reconciler"
-	"knative.dev/sample-source/pkg/reconciler/sample/resources"
+	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
+	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
+	"knative.dev/control-data-plane-communication/pkg/reconciler"
+	"knative.dev/control-data-plane-communication/pkg/reconciler/sample/resources"
 )
 
 // Reconciler reconciles a SampleSource object

@@ -22,9 +22,9 @@ import (
 	context "context"
 
 	v1 "k8s.io/api/core/v1"
+	v1alpha1 "knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
+	samplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
 	reconciler "knative.dev/pkg/reconciler"
-	v1alpha1 "knative.dev/sample-source/pkg/apis/samples/v1alpha1"
-	samplesource "knative.dev/sample-source/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
 )
 
 // TODO: PLEASE COPY AND MODIFY THIS FILE AS A STARTING POINT

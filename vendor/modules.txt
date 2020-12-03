@@ -70,12 +70,16 @@ github.com/census-instrumentation/opencensus-proto/gen-go/agent/trace/v1
 github.com/census-instrumentation/opencensus-proto/gen-go/metrics/v1
 github.com/census-instrumentation/opencensus-proto/gen-go/resource/v1
 github.com/census-instrumentation/opencensus-proto/gen-go/trace/v1
-# github.com/cloudevents/sdk-go/v2 v2.2.0
+# github.com/cloudevents/sdk-go/protocol/ws/v2 v2.0.0-00010101000000-000000000000 => github.com/slinkydeveloper/sdk-go/protocol/ws/v2 v2.0.0-20201125142642-046ad792e0de
+## explicit
+github.com/cloudevents/sdk-go/protocol/ws/v2
+# github.com/cloudevents/sdk-go/v2 v2.2.0 => github.com/slinkydeveloper/sdk-go/v2 v2.0.0-20201125142642-046ad792e0de
 ## explicit
 github.com/cloudevents/sdk-go/v2
 github.com/cloudevents/sdk-go/v2/binding
 github.com/cloudevents/sdk-go/v2/binding/format
 github.com/cloudevents/sdk-go/v2/binding/spec
+github.com/cloudevents/sdk-go/v2/binding/utils
 github.com/cloudevents/sdk-go/v2/client
 github.com/cloudevents/sdk-go/v2/context
 github.com/cloudevents/sdk-go/v2/event
@@ -161,6 +165,8 @@ github.com/json-iterator/go
 # github.com/kelseyhightower/envconfig v1.4.0
 ## explicit
 github.com/kelseyhightower/envconfig
+# github.com/klauspost/compress v1.10.3
+github.com/klauspost/compress/flate
 # github.com/konsorten/go-windows-terminal-sequences v1.0.3
 github.com/konsorten/go-windows-terminal-sequences
 # github.com/lightstep/tracecontext.go v0.0.0-20181129014701-1757c391b1ac
@@ -840,10 +846,18 @@ knative.dev/pkg/webhook/configmaps
 knative.dev/pkg/webhook/resourcesemantics
 knative.dev/pkg/webhook/resourcesemantics/defaulting
 knative.dev/pkg/webhook/resourcesemantics/validation
+# nhooyr.io/websocket v1.8.6
+nhooyr.io/websocket
+nhooyr.io/websocket/internal/bpool
+nhooyr.io/websocket/internal/errd
+nhooyr.io/websocket/internal/wsjs
+nhooyr.io/websocket/internal/xsync
 # sigs.k8s.io/structured-merge-diff/v3 v3.0.1-0.20200706213357-43c19bbb7fba
 sigs.k8s.io/structured-merge-diff/v3/value
 # sigs.k8s.io/yaml v1.2.0
 sigs.k8s.io/yaml
+# github.com/cloudevents/sdk-go/protocol/ws/v2 => github.com/slinkydeveloper/sdk-go/protocol/ws/v2 v2.0.0-20201125142642-046ad792e0de
+# github.com/cloudevents/sdk-go/v2 => github.com/slinkydeveloper/sdk-go/v2 v2.0.0-20201125142642-046ad792e0de
 # github.com/prometheus/client_golang => github.com/prometheus/client_golang v0.9.2
 # k8s.io/api => k8s.io/api v0.18.8
 # k8s.io/apiextensions-apiserver => k8s.io/apiextensions-apiserver v0.18.8

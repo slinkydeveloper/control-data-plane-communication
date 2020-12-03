@@ -23,8 +23,8 @@ import (
 
 	types "k8s.io/apimachinery/pkg/types"
 	cache "k8s.io/client-go/tools/cache"
+	v1alpha1 "knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	reconciler "knative.dev/pkg/reconciler"
-	v1alpha1 "knative.dev/sample-source/pkg/apis/samples/v1alpha1"
 )
 
 // state is used to track the state of a reconciler in a single run.

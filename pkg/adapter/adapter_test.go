@@ -69,7 +69,7 @@ func TestAdapterMain(t *testing.T) {
 	// environment var t.Name() is set to "main"
 	// (see https://talks.golang.org/2014/testing.slide#23)
 	if os.Getenv(t.Name()) == "main" {
-		adapter.Main("sample-source", NewEnv, NewAdapter)
+		adapter.Main("control-data-plane-communication", NewEnv, NewAdapter)
 		return
 	}
 

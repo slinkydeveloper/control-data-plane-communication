@@ -24,7 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"knative.dev/pkg/kmeta"
 
-	"knative.dev/sample-source/pkg/apis/samples/v1alpha1"
+	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 )
 
 // ReceiveAdapterArgs are the arguments needed to create a Sample Source Receive Adapter.

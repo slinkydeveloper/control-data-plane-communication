@@ -21,7 +21,7 @@ webhooks:
   - admissionReviewVersions: ["v1", "v1beta1"]
     clientConfig:
       service:
-        name: sample-source-webhook
+        name: control-data-plane-communication-webhook
         namespace: knative-samples
     sideEffects: None
     failurePolicy: Fail
@@ -37,7 +37,7 @@ webhooks:
   - admissionReviewVersions: ["v1", "v1beta1"]
     clientConfig:
       service:
-        name: sample-source-webhook
+        name: control-data-plane-communication-webhook
         namespace: knative-samples
     sideEffects: None
     failurePolicy: Fail
@@ -53,7 +53,7 @@ webhooks:
   - admissionReviewVersions: ["v1", "v1beta1"]
     clientConfig:
       service:
-        name: sample-source-webhook
+        name: control-data-plane-communication-webhook
         namespace: knative-samples
     sideEffects: None
     failurePolicy: Fail

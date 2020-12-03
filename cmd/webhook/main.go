@@ -34,7 +34,7 @@ import (
 	"knative.dev/pkg/webhook/resourcesemantics/defaulting"
 	"knative.dev/pkg/webhook/resourcesemantics/validation"
 
-	"knative.dev/sample-source/pkg/apis/samples/v1alpha1"
+	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 )
 
 var types = map[schema.GroupVersionKind]resourcesemantics.GenericCRD{
@@ -44,7 +44,7 @@ var types = map[schema.GroupVersionKind]resourcesemantics.GenericCRD{
 
 var callbacks = map[schema.GroupVersionKind]validation.Callback{}
 
-const admissionWebhookName = "sample-source-webhook"
+const admissionWebhookName = "control-data-plane-communication-webhook"
 
 // NewDefaultingAdmissionController sets up mutating webhook.
 func NewDefaultingAdmissionController(ctx context.Context, cmw configmap.Watcher) *controller.Impl {

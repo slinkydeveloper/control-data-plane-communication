@@ -17,7 +17,7 @@ limitations under the License.
 package v1alpha1
 
 import (
-	"knative.dev/sample-source/pkg/apis/samples"
+	"knative.dev/control-data-plane-communication/pkg/apis/samples"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"

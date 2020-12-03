@@ -31,13 +31,13 @@ import (
 	scheme "k8s.io/client-go/kubernetes/scheme"
 	v1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	record "k8s.io/client-go/tools/record"
+	versionedscheme "knative.dev/control-data-plane-communication/pkg/client/clientset/versioned/scheme"
+	client "knative.dev/control-data-plane-communication/pkg/client/injection/client"
+	samplesource "knative.dev/control-data-plane-communication/pkg/client/injection/informers/samples/v1alpha1/samplesource"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	controller "knative.dev/pkg/controller"
 	logging "knative.dev/pkg/logging"
 	reconciler "knative.dev/pkg/reconciler"
-	versionedscheme "knative.dev/sample-source/pkg/client/clientset/versioned/scheme"
-	client "knative.dev/sample-source/pkg/client/injection/client"
-	samplesource "knative.dev/sample-source/pkg/client/injection/informers/samples/v1alpha1/samplesource"
 )
 
 const (
