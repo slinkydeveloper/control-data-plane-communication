@@ -19,9 +19,11 @@ package sample
 import (
 	"context"
 
+	"k8s.io/apimachinery/pkg/api/equality"
 	reconcilersource "knative.dev/eventing/pkg/reconciler/source"
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
+	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 
 	"github.com/kelseyhightower/envconfig"
 	"k8s.io/client-go/tools/cache"
@@ -45,6 +47,8 @@ func NewController(
 	ctx context.Context,
 	cmw configmap.Watcher,
 ) *controller.Impl {
+	ctx = controlprotocol.WithControlConnections(ctx)
+
 	deploymentInformer := deploymentinformer.Get(ctx)
 	sampleSourceInformer := samplesourceinformer.Get(ctx)
 
@@ -63,7 +67,31 @@ func NewController(
 
 	logging.FromContext(ctx).Info("Setting up event handlers")
 
-	sampleSourceInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
+	sampleSourceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: impl.Enqueue,
+		UpdateFunc: func(oldObj, newObj interface{}) {
+			// Check if only the interval is different
+			old := oldObj.(*v1alpha1.SampleSource)
+			new := newObj.(*v1alpha1.SampleSource)
+			cpy := old.DeepCopy()
+			cpy.Spec.Interval = new.Spec.Interval
+
+			logging.FromContext(ctx).Infof("Received update request\nOld: %v\nNew: %v", oldObj, newObj)
+
+			if equality.Semantic.DeepEqual(cpy.Status, new.Status) {
+				logging.FromContext(ctx).Infof("Only interval is different")
+
+				// Only interval is different
+				if err := r.UpdateInterval(ctx, new); err != nil {
+					logging.FromContext(ctx).Errorf("Error while updating the interval: %v", err)
+				}
+			} else {
+				logging.FromContext(ctx).Infof("Everything is different")
+				impl.Enqueue(newObj)
+			}
+		},
+		DeleteFunc: impl.Enqueue,
+	})
 
 	deploymentInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: controller.FilterControllerGK(v1alpha1.Kind("SampleSource")),

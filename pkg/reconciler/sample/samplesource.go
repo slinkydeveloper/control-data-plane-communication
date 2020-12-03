@@ -18,7 +18,12 @@ package sample
 
 import (
 	"context"
+	"fmt"
+	"time"
 
+	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/google/uuid"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	// k8s.io imports
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -33,6 +38,7 @@ import (
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
+	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 	"knative.dev/control-data-plane-communication/pkg/reconciler"
 	"knative.dev/control-data-plane-communication/pkg/reconciler/sample/resources"
 )
@@ -50,6 +56,54 @@ type Reconciler struct {
 
 // Check that our Reconciler implements Interface
 var _ reconcilersamplesource.Interface = (*Reconciler)(nil)
+
+func (r *Reconciler) UpdateInterval(ctx context.Context, src *v1alpha1.SampleSource) pkgreconciler.Event {
+	namespace := src.GetObjectMeta().GetNamespace()
+	deploymentName := resources.MakeReceiveAdapterDeploymentName(src)
+
+	_, err := r.dr.KubeClientSet.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		logging.FromContext(ctx).Infof("Deployment '%s' in namespace '%s' not found", deploymentName, namespace)
+
+		// We need to create from scratch the ra and go through the usual reconcile
+		return r.ReconcileKind(ctx, src)
+	} else if err != nil {
+		return fmt.Errorf("error getting receive adapter %q: %v", deploymentName, err)
+	}
+
+	// We need to get all the pods for that ra deployment
+	pods, err := r.dr.KubeClientSet.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: resources.LabelSelector(src.Name),
+	})
+
+	newInterval, err := time.ParseDuration(src.Spec.Interval)
+	if err != nil {
+		return err
+	}
+
+	for _, pod := range pods.Items {
+		podIp := pod.Status.PodIP
+		logging.FromContext(ctx).Infof("Updating interval for pod '%s' with ip '%s'", pod.Name, podIp)
+
+		ctrl, err := controlprotocol.ControlInterfaceFromContext(ctx, "samplesource-controller", podIp)
+		if err != nil {
+			return err
+		}
+
+		event := cloudevents.NewEvent()
+		event.SetID(uuid.New().String())
+		event.SetType("updateinterval.samplesource.control.knative.dev")
+		event.SetSource("samplesource-controller")
+		event.SetExtension("newinterval", newInterval)
+
+		err = ctrl.SendAndWaitForAck(event)
+		if err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
 
 // ReconcileKind implements Interface.ReconcileKind.
 func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSource) pkgreconciler.Event {

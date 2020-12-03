@@ -16,7 +16,7 @@ type controlService struct {
 	source string
 
 	outbound chan cloudevents.Event
-	inbound  chan cloudevents.Event
+	inbound  chan ControlMessage
 
 	waitingAcksMutex sync.RWMutex
 	waitingAcks      map[string]chan interface{}
@@ -26,13 +26,14 @@ func newControlService(ctx context.Context, source string) *controlService {
 	return &controlService{
 		ctx:         ctx,
 		outbound:    make(chan cloudevents.Event, 10),
-		inbound:     make(chan cloudevents.Event, 10),
+		inbound:     make(chan ControlMessage, 10),
 		source:      source,
 		waitingAcks: make(map[string]chan interface{}),
 	}
 }
 
 func (c *controlService) SendAndWaitForAck(event cloudevents.Event) error {
+	event.SetSource(c.source)
 	c.outbound <- event
 
 	ackCh := make(chan interface{}, 1)
@@ -42,22 +43,14 @@ func (c *controlService) SendAndWaitForAck(event cloudevents.Event) error {
 	c.waitingAcks[event.ID()] = ackCh
 	c.waitingAcksMutex.Unlock()
 
+	// TODO This needs a timeout and also a retry mechanism
 	<-ackCh
 
 	return nil
 }
 
-func (c *controlService) Receive() (event cloudevents.Event, ackFunc func(), err error) {
-	event = <-c.inbound
-	ackFunc = func() {
-		ackEv := cloudevents.NewEvent()
-		ackEv.SetID(event.ID())
-		ackEv.SetType(AckMessageType)
-		ackEv.SetSource(c.source)
-		c.outbound <- ackEv
-	}
-
-	return event, ackFunc, nil
+func (c *controlService) InboundMessages() <-chan ControlMessage {
+	return c.inbound
 }
 
 func (c *controlService) runPollingLoops(ctx context.Context, p *cews.Protocol) {
@@ -75,6 +68,7 @@ func (c *controlService) runPollingLoops(ctx context.Context, p *cews.Protocol) 
 			if err != nil {
 				logging.FromContext(ctx).Warnf("Error while translating the new control message to event: %v", err)
 			}
+			logging.FromContext(ctx).Infof("Read goroutine received event: %v", ev)
 			c.accept(*ev)
 		}
 	}()
@@ -83,7 +77,7 @@ func (c *controlService) runPollingLoops(ctx context.Context, p *cews.Protocol) 
 	go func() {
 		for {
 			select {
-			case ev := <-c.inbound:
+			case ev := <-c.outbound:
 				err := p.Send(ctx, binding.ToMessage(&ev))
 				if err != nil {
 					logging.FromContext(ctx).Warnf("Error while sending a control message: %v", err)
@@ -105,6 +99,18 @@ func (c *controlService) accept(event cloudevents.Event) {
 		c.waitingAcksMutex.RUnlock()
 		ackCh <- nil
 	} else {
-		c.inbound <- event
+		ackFunc := func() {
+			ackEv := cloudevents.NewEvent()
+			ackEv.SetID(event.ID())
+			ackEv.SetType(AckMessageType)
+			ackEv.SetSource(c.source)
+			c.outbound <- ackEv
+		}
+		c.inbound <- ControlMessage{event: event, ackFunc: ackFunc}
 	}
+}
+
+func (c *controlService) close() {
+	close(c.outbound)
+	close(c.inbound)
 }

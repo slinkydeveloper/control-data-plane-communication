@@ -37,6 +37,10 @@ type ReceiveAdapterArgs struct {
 	AdditionalEnvs []corev1.EnvVar
 }
 
+func MakeReceiveAdapterDeploymentName(src *v1alpha1.SampleSource) string {
+	return kmeta.ChildName(fmt.Sprintf("samplesource-%s-", src.Name), string(src.GetUID()))
+}
+
 // MakeReceiveAdapter generates (but does not insert into K8s) the Receive Adapter Deployment for
 // Sample sources.
 func MakeReceiveAdapter(args *ReceiveAdapterArgs) *v1.Deployment {
@@ -44,7 +48,7 @@ func MakeReceiveAdapter(args *ReceiveAdapterArgs) *v1.Deployment {
 	return &v1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: args.Source.Namespace,
-			Name:      kmeta.ChildName(fmt.Sprintf("samplesource-%s-", args.Source.Name), string(args.Source.GetUID())),
+			Name:      MakeReceiveAdapterDeploymentName(args.Source),
 			Labels:    args.Labels,
 			OwnerReferences: []metav1.OwnerReference{
 				*kmeta.NewControllerRef(args.Source),
@@ -69,6 +73,10 @@ func MakeReceiveAdapter(args *ReceiveAdapterArgs) *v1.Deployment {
 								makeEnv(args.EventSource, &args.Source.Spec),
 								args.AdditionalEnvs...,
 							),
+							Ports: []corev1.ContainerPort{{
+								Name:          "control",
+								ContainerPort: 9090,
+							}},
 						},
 					},
 				},

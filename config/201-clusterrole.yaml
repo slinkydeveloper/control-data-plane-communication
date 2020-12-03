@@ -42,7 +42,8 @@ rules:
 - apiGroups:
   - ""
   resources:
-  - events
+    - events
+  - pods
   verbs: *everything
 
 - apiGroups:

@@ -28,3 +28,7 @@ func Labels(name string) map[string]string {
 		"knative-eventing-source-name": name,
 	}
 }
+
+func LabelSelector(name string) string {
+	return "knative-eventing-source=" + controllerAgentName + ",knative-eventing-source-name=" + name
+}

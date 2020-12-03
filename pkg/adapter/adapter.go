@@ -25,6 +25,8 @@ import (
 
 	"knative.dev/eventing/pkg/adapter/v2"
 	"knative.dev/pkg/logging"
+
+	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 )
 
 type envConfig struct {
@@ -46,6 +48,8 @@ type Adapter struct {
 	interval      time.Duration
 
 	nextID int
+
+	controlServer controlprotocol.ControlInterface
 }
 
 type dataExample struct {
@@ -70,8 +74,31 @@ func (a *Adapter) newEvent() cloudevents.Event {
 
 // Start runs the adapter.
 // Returns if ctx is cancelled or Send() returns an error.
-func (a *Adapter) Start(ctx context.Context) error {
+func (a *Adapter) Start(ctx context.Context) (err error) {
 	// Start control server
+	a.controlServer, err = controlprotocol.StartControlServer(ctx, "samplesource")
+	if err != nil {
+		return err
+	}
+
+	// When receiving new interval changes, modify the interval value
+	go func() {
+		for controlMessage := range a.controlServer.InboundMessages() {
+			// Here we need some checks on the type of inbound event etc, but we don't care for the PoC
+			var newInterval int
+			err := controlMessage.Event().ExtensionAs("newinterval", &newInterval)
+			if err != nil {
+				logging.FromContext(ctx).Errorf("Cannot read the new interval: %v", err)
+			}
+
+			a.intervalMutex.Lock()
+			a.interval = time.Duration(newInterval) * time.Second
+			logging.FromContext(ctx).Infof("New interval set %v", a.interval)
+			a.intervalMutex.Unlock()
+
+			controlMessage.Ack()
+		}
+	}()
 
 	a.intervalMutex.Lock()
 	a.logger.Infow("Starting heartbeat", zap.String("interval", a.interval.String()))
