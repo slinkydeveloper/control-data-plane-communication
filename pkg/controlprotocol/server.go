@@ -24,7 +24,8 @@ func (cs *controlServer) ServeHTTP(writer http.ResponseWriter, request *http.Req
 
 	logging.FromContext(cs.ctx).Infof("New link established")
 
-	cs.ctrlService.runPollingLoops(cs.ctx, p)
+	cs.ctrlService.blockOnPolling(request.Context(), p)
+
 	_ = p.Close(cs.ctx)
 	cs.ctrlService.close()
 }

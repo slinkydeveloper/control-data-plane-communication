@@ -4,7 +4,6 @@ import (
 	"context"
 	"sync"
 	"testing"
-	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/google/uuid"
@@ -55,7 +54,6 @@ func TestE2EClientToServer(t *testing.T) {
 
 	server, err := StartControlServer(ctx, "test-server")
 	require.NoError(t, err)
-	time.Sleep(1 * time.Second)
 	client, err := StartControlClient(ctx, "test-client", "localhost")
 	require.NoError(t, err)
 

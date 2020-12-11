@@ -65,7 +65,7 @@ func (c *controlService) InboundMessages() <-chan ControlMessage {
 	return c.inbound
 }
 
-func (c *controlService) runPollingLoops(ctx context.Context, p *cews.Protocol) {
+func (c *controlService) blockOnPolling(ctx context.Context, p *cews.Protocol) {
 	// Start read goroutine
 	go func() {
 		for {
@@ -75,6 +75,7 @@ func (c *controlService) runPollingLoops(ctx context.Context, p *cews.Protocol) 
 			}
 			if err != nil {
 				logging.FromContext(ctx).Warnf("Error while reading a new control message: %v", err)
+				return
 			}
 			ev, err := binding.ToEvent(ctx, m)
 			if err != nil {

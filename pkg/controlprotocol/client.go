@@ -34,7 +34,7 @@ func StartControlClient(ctx context.Context, source string, target string) (Cont
 	}
 
 	go func() {
-		ctrlService.runPollingLoops(ctx, p)
+		ctrlService.blockOnPolling(ctx, p)
 		_ = p.Close(ctx)
 		ctrlService.close()
 	}()
