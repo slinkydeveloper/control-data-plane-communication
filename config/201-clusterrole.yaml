@@ -43,7 +43,7 @@ rules:
   - ""
   resources:
     - events
-  - pods
+    - pods
   verbs: *everything
 
 - apiGroups:

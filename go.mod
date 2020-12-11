@@ -6,6 +6,7 @@ require (
 	github.com/cloudevents/sdk-go/protocol/ws/v2 v2.0.0-00010101000000-000000000000
 	github.com/cloudevents/sdk-go/v2 v2.2.0
 	github.com/google/go-cmp v0.5.2
+	github.com/google/uuid v1.1.2
 	github.com/kelseyhightower/envconfig v1.4.0
 	github.com/stretchr/testify v1.5.1
 	go.uber.org/zap v1.16.0
@@ -15,6 +16,7 @@ require (
 	knative.dev/eventing v0.19.1-0.20201202055153-e5eee316e4f8
 	knative.dev/hack v0.0.0-20201201234937-fddbf732e450
 	knative.dev/pkg v0.0.0-20201202014037-81712ed625fd
+	nhooyr.io/websocket v1.8.6
 )
 
 replace (

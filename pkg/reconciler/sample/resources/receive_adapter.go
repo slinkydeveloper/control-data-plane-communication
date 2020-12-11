@@ -74,7 +74,7 @@ func MakeReceiveAdapter(args *ReceiveAdapterArgs) *v1.Deployment {
 								args.AdditionalEnvs...,
 							),
 							Ports: []corev1.ContainerPort{{
-								Name:          "control",
+								Name:          "ws",
 								ContainerPort: 9090,
 							}},
 						},

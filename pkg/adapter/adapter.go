@@ -80,20 +80,25 @@ func (a *Adapter) Start(ctx context.Context) (err error) {
 	if err != nil {
 		return err
 	}
+	logging.FromContext(ctx).Info("Control server started")
 
 	// When receiving new interval changes, modify the interval value
 	go func() {
 		for controlMessage := range a.controlServer.InboundMessages() {
 			// Here we need some checks on the type of inbound event etc, but we don't care for the PoC
-			var newInterval int
+			var newInterval string
 			err := controlMessage.Event().ExtensionAs("newinterval", &newInterval)
 			if err != nil {
 				logging.FromContext(ctx).Errorf("Cannot read the new interval: %v", err)
 			}
 
 			a.intervalMutex.Lock()
-			a.interval = time.Duration(newInterval) * time.Second
-			logging.FromContext(ctx).Infof("New interval set %v", a.interval)
+			a.interval, err = time.ParseDuration(newInterval)
+			if err != nil {
+				logging.FromContext(ctx).Errorf("Cannot parse the new interval: %v", err)
+			} else {
+				logging.FromContext(ctx).Infof("New interval set %v", a.interval)
+			}
 			a.intervalMutex.Unlock()
 
 			controlMessage.Ack()

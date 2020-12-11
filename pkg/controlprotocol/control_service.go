@@ -2,14 +2,19 @@ package controlprotocol
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"sync"
+	"time"
 
 	cews "github.com/cloudevents/sdk-go/protocol/ws/v2"
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/cloudevents/sdk-go/v2/binding"
 	"knative.dev/pkg/logging"
 )
+
+const sendRetries = 5
+const sendTimeout = 10 * time.Second
 
 type controlService struct {
 	ctx    context.Context
@@ -33,20 +38,27 @@ func newControlService(ctx context.Context, source string) *controlService {
 }
 
 func (c *controlService) SendAndWaitForAck(event cloudevents.Event) error {
-	event.SetSource(c.source)
-	c.outbound <- event
+	for i := 0; i < sendRetries; i++ {
+		event.SetSource(c.source)
+		c.outbound <- event
 
-	ackCh := make(chan interface{}, 1)
+		ackCh := make(chan interface{}, 1)
 
-	// Register the ack between the waiting acks
-	c.waitingAcksMutex.Lock()
-	c.waitingAcks[event.ID()] = ackCh
-	c.waitingAcksMutex.Unlock()
+		// Register the ack between the waiting acks
+		c.waitingAcksMutex.Lock()
+		c.waitingAcks[event.ID()] = ackCh
+		c.waitingAcksMutex.Unlock()
 
-	// TODO This needs a timeout and also a retry mechanism
-	<-ackCh
+		select {
+		case <-ackCh:
+			return nil
+		case <-time.After(sendTimeout):
+			logging.FromContext(c.ctx).Infof("Timeout waiting for the ack")
+			continue
+		}
+	}
 
-	return nil
+	return fmt.Errorf("retry exceeded for event %v", event)
 }
 
 func (c *controlService) InboundMessages() <-chan ControlMessage {
@@ -82,6 +94,7 @@ func (c *controlService) runPollingLoops(ctx context.Context, p *cews.Protocol) 
 				if err != nil {
 					logging.FromContext(ctx).Warnf("Error while sending a control message: %v", err)
 				}
+
 			case <-ctx.Done():
 				return
 			}
@@ -97,7 +110,7 @@ func (c *controlService) accept(event cloudevents.Event) {
 		c.waitingAcksMutex.RLock()
 		ackCh := c.waitingAcks[event.ID()]
 		c.waitingAcksMutex.RUnlock()
-		ackCh <- nil
+		close(ackCh)
 	} else {
 		ackFunc := func() {
 			ackEv := cloudevents.NewEvent()

@@ -15,7 +15,7 @@ metadata:
   name: control-data-plane-communication
   namespace: knative-samples
 spec:
-  interval: "5s"
+  interval: "1s"
   sink:
     ref:
       apiVersion: serving.knative.dev/v1

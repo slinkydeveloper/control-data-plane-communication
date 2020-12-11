@@ -19,7 +19,6 @@ package sample
 import (
 	"context"
 	"fmt"
-	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/google/uuid"
@@ -75,10 +74,8 @@ func (r *Reconciler) UpdateInterval(ctx context.Context, src *v1alpha1.SampleSou
 	pods, err := r.dr.KubeClientSet.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: resources.LabelSelector(src.Name),
 	})
-
-	newInterval, err := time.ParseDuration(src.Spec.Interval)
 	if err != nil {
-		return err
+		return fmt.Errorf("error getting receive adapter pods %q: %v", deploymentName, err)
 	}
 
 	for _, pod := range pods.Items {
@@ -94,7 +91,7 @@ func (r *Reconciler) UpdateInterval(ctx context.Context, src *v1alpha1.SampleSou
 		event.SetID(uuid.New().String())
 		event.SetType("updateinterval.samplesource.control.knative.dev")
 		event.SetSource("samplesource-controller")
-		event.SetExtension("newinterval", newInterval)
+		event.SetExtension("newinterval", src.Spec.Interval)
 
 		err = ctrl.SendAndWaitForAck(event)
 		if err != nil {
