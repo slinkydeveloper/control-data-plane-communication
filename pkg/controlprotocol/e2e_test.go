@@ -12,7 +12,7 @@ import (
 
 func TestStartClientAndServer(t *testing.T) {
 	ctx, cancelFn := context.WithCancel(context.TODO())
-	t.Cleanup(cancelFn)
+	defer cancelFn()
 
 	_, err := StartControlServer(ctx, "test-server")
 	require.NoError(t, err)
@@ -22,7 +22,7 @@ func TestStartClientAndServer(t *testing.T) {
 
 func TestE2EServerToClient(t *testing.T) {
 	ctx, cancelFn := context.WithCancel(context.TODO())
-	t.Cleanup(cancelFn)
+	defer cancelFn()
 
 	server, err := StartControlServer(ctx, "test-server")
 	require.NoError(t, err)
@@ -50,7 +50,7 @@ func TestE2EServerToClient(t *testing.T) {
 
 func TestE2EClientToServer(t *testing.T) {
 	ctx, cancelFn := context.WithCancel(context.TODO())
-	t.Cleanup(cancelFn)
+	defer cancelFn()
 
 	server, err := StartControlServer(ctx, "test-server")
 	require.NoError(t, err)

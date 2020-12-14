@@ -9,12 +9,12 @@ import (
 	"knative.dev/pkg/logging"
 )
 
-type controlServer struct {
+type controlHandler struct {
 	ctx         context.Context
 	ctrlService *controlService
 }
 
-func (cs *controlServer) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+func (cs *controlHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	p, err := cews.Accept(cs.ctx, writer, request, nil)
 	if err != nil {
 		logging.FromContext(cs.ctx).Errorf("Error while accepting a new control connection")
@@ -22,20 +22,19 @@ func (cs *controlServer) ServeHTTP(writer http.ResponseWriter, request *http.Req
 		return
 	}
 
-	logging.FromContext(cs.ctx).Infof("New link established")
+	logging.FromContext(cs.ctx).Debugf("New link established")
 
-	cs.ctrlService.blockOnPolling(request.Context(), p)
+	cs.ctrlService.blockOnPolling(cs.ctx, p)
 
 	_ = p.Close(cs.ctx)
-	cs.ctrlService.close()
 }
 
 func StartControlServer(ctx context.Context, source string) (ControlInterface, error) {
 	ctrlService := newControlService(ctx, source)
 
-	server := http.Server{
-		Addr:         ":9090",
-		Handler:      &controlServer{ctx: ctx, ctrlService: ctrlService},
+	server := &http.Server{
+		Addr:         ":9000",
+		Handler:      &controlHandler{ctx: ctx, ctrlService: ctrlService},
 		ReadTimeout:  time.Second * 10,
 		WriteTimeout: time.Second * 10,
 	}

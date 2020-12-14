@@ -2,6 +2,7 @@ package controlprotocol
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -37,24 +38,33 @@ func newControlService(ctx context.Context, source string) *controlService {
 	}
 }
 
+func (c *controlService) send(event cloudevents.Event) <-chan interface{} {
+	ackCh := make(chan interface{}, 1)
+
+	event.SetSource(c.source)
+	c.outbound <- event
+
+	// Register the ack between the waiting acks
+	c.waitingAcksMutex.Lock()
+	c.waitingAcks[event.ID()] = ackCh
+	c.waitingAcksMutex.Unlock()
+
+	return ackCh
+}
+
 func (c *controlService) SendAndWaitForAck(event cloudevents.Event) error {
 	for i := 0; i < sendRetries; i++ {
-		event.SetSource(c.source)
-		c.outbound <- event
-
-		ackCh := make(chan interface{}, 1)
-
-		// Register the ack between the waiting acks
-		c.waitingAcksMutex.Lock()
-		c.waitingAcks[event.ID()] = ackCh
-		c.waitingAcksMutex.Unlock()
-
 		select {
-		case <-ackCh:
+		case <-c.send(event):
+			c.waitingAcksMutex.Lock()
+			delete(c.waitingAcks, event.ID())
+			c.waitingAcksMutex.Unlock()
 			return nil
 		case <-time.After(sendTimeout):
-			logging.FromContext(c.ctx).Infof("Timeout waiting for the ack")
-			continue
+			logging.FromContext(c.ctx).Debugf("Timeout waiting for the ack, retrying to send: %s", event.Type())
+			c.waitingAcksMutex.Lock()
+			delete(c.waitingAcks, event.ID())
+			c.waitingAcksMutex.Unlock()
 		}
 	}
 
@@ -66,11 +76,16 @@ func (c *controlService) InboundMessages() <-chan ControlMessage {
 }
 
 func (c *controlService) blockOnPolling(ctx context.Context, p *cews.Protocol) {
+	receiveCtx, receiveCancelFn := context.WithCancel(ctx)
+	sendCtx, sendCancelFn := context.WithCancel(ctx)
+
 	// Start read goroutine
 	go func() {
+		defer receiveCancelFn()
 		for {
 			m, err := p.UnsafeReceive(ctx)
-			if err == io.EOF {
+			if errors.Is(err, io.EOF) || (err != nil && err == ctx.Err()) {
+				logging.FromContext(ctx).Debugf("EOF or context cancelled: %v", err)
 				return
 			}
 			if err != nil {
@@ -78,31 +93,40 @@ func (c *controlService) blockOnPolling(ctx context.Context, p *cews.Protocol) {
 				return
 			}
 			ev, err := binding.ToEvent(ctx, m)
+			_ = m.Finish(nil)
 			if err != nil {
 				logging.FromContext(ctx).Warnf("Error while translating the new control message to event: %v", err)
 			}
-			logging.FromContext(ctx).Infof("Read goroutine received event: %v", ev)
 			c.accept(*ev)
 		}
 	}()
 
 	// Start write goroutine
 	go func() {
+		defer sendCancelFn()
 		for {
 			select {
 			case ev := <-c.outbound:
 				err := p.Send(ctx, binding.ToMessage(&ev))
+				if errors.Is(err, io.EOF) || (err != nil && err == ctx.Err()) {
+					logging.FromContext(ctx).Debugf("EOF or context cancelled: %v", err)
+					c.outbound <- ev
+					return
+				}
 				if err != nil {
 					logging.FromContext(ctx).Warnf("Error while sending a control message: %v", err)
 				}
-
 			case <-ctx.Done():
 				return
 			}
 		}
 	}()
 
-	<-ctx.Done()
+	select {
+	case <-ctx.Done():
+	case <-receiveCtx.Done():
+	case <-sendCtx.Done():
+	}
 }
 
 func (c *controlService) accept(event cloudevents.Event) {
@@ -111,7 +135,11 @@ func (c *controlService) accept(event cloudevents.Event) {
 		c.waitingAcksMutex.RLock()
 		ackCh := c.waitingAcks[event.ID()]
 		c.waitingAcksMutex.RUnlock()
-		close(ackCh)
+		if ackCh != nil {
+			close(ackCh)
+		} else {
+			logging.FromContext(c.ctx).Debugf("Ack received but no channel available: %s", event.ID())
+		}
 	} else {
 		ackFunc := func() {
 			ackEv := cloudevents.NewEvent()
@@ -124,7 +152,7 @@ func (c *controlService) accept(event cloudevents.Event) {
 	}
 }
 
-func (c *controlService) close() {
+func (c *controlService) Close(ctx context.Context) {
 	close(c.outbound)
 	close(c.inbound)
 }

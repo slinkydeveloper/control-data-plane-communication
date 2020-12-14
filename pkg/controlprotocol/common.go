@@ -1,12 +1,17 @@
 package controlprotocol
 
-import cloudevents "github.com/cloudevents/sdk-go/v2"
+import (
+	"context"
+
+	cloudevents "github.com/cloudevents/sdk-go/v2"
+)
 
 const AckMessageType = "ack.control.knative.dev"
 
 type ControlInterface interface {
 	SendAndWaitForAck(event cloudevents.Event) error
 	InboundMessages() <-chan ControlMessage
+	Close(ctx context.Context)
 }
 
 type ControlMessage struct {
