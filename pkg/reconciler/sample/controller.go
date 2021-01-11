@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
 	reconcilersource "knative.dev/eventing/pkg/reconciler/source"
 
 	"github.com/kelseyhightower/envconfig"
@@ -54,13 +55,11 @@ func NewController(
 	r := &Reconciler{
 		dr: &reconciler.DeploymentReconciler{KubeClientSet: kubeclient.Get(ctx)},
 		// Config accessor takes care of tracing/config/logging config propagation to the receive adapter
-		configAccessor:       reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
-		sampleSourceInformer: sampleSourceInformer,
-		controlConnections:   controlprotocol.New("samplesource-controller"),
+		configAccessor:     reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
+		controlConnections: controlprotocol.New("samplesource-controller"),
 
-		srcPodsIPs:               make(map[string]string),
-		lastReceivedStatusUpdate: make(map[string]time.Duration),
-		lastIntervalUpdateSent:   make(map[string]time.Duration),
+		srcPodsIPs:             make(map[string]string),
+		lastIntervalUpdateSent: make(map[string]time.Duration),
 	}
 	if err := envconfig.Process("", r); err != nil {
 		logging.FromContext(ctx).Panicf("required environment variable is not defined: %v", err)
@@ -69,7 +68,7 @@ func NewController(
 	impl := samplesource.NewImpl(ctx, r)
 
 	r.sinkResolver = resolver.NewURIResolver(ctx, impl.EnqueueKey)
-	r.enqueueKey = impl.EnqueueKey
+	r.statusUpdateStore = &StatusUpdateStore{enqueueKey: impl.EnqueueKey, lastReceivedStatusUpdate: make(map[types.UID]time.Duration)}
 
 	logging.FromContext(ctx).Info("Setting up event handlers")
 

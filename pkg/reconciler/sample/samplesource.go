@@ -24,7 +24,6 @@ import (
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/google/uuid"
-	"go.uber.org/zap"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -41,7 +40,6 @@ import (
 	reconcilersource "knative.dev/eventing/pkg/reconciler/source"
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
-	v1alpha1informers "knative.dev/control-data-plane-communication/pkg/client/informers/externalversions/samples/v1alpha1"
 	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
 	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 	"knative.dev/control-data-plane-communication/pkg/reconciler"
@@ -56,11 +54,9 @@ const (
 type Reconciler struct {
 	ReceiveAdapterImage string `envconfig:"SAMPLE_SOURCE_RA_IMAGE" required:"true"`
 
-	dr                   *reconciler.DeploymentReconciler
-	sinkResolver         *resolver.URIResolver
-	sampleSourceInformer v1alpha1informers.SampleSourceInformer
-	configAccessor       reconcilersource.ConfigAccessor
-	enqueueKey           func(name types.NamespacedName)
+	dr             *reconciler.DeploymentReconciler
+	sinkResolver   *resolver.URIResolver
+	configAccessor reconcilersource.ConfigAccessor
 
 	// TODO we should move this to control.go, together with its logic
 	srcPodsIPs     map[string]string
@@ -71,8 +67,7 @@ type Reconciler struct {
 	lastIntervalUpdateSent     map[string]time.Duration
 	lastIntervalUpdateSentLock sync.Mutex
 
-	lastReceivedStatusUpdate     map[string]time.Duration
-	lastReceivedStatusUpdateLock sync.Mutex
+	statusUpdateStore *StatusUpdateStore
 }
 
 // Check that our Reconciler implements Interface
@@ -159,13 +154,12 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		}
 
 		// We need to start the message listener for this control interface
-		deploymentName := ra.Name
-		srcName := src.Name
-		srcNamespace := src.Namespace
+		srcUid := src.UID
+		srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
 		go func() {
 			for ev := range ctrl.InboundMessages() {
-				r.controlMessageHandler(ctx, ev.Event(), deploymentName, srcName, srcNamespace)
 				ev.Ack()
+				r.statusUpdateStore.ControlMessageHandler(ctx, ev.Event(), srcUid, srcNamespacedName)
 			}
 		}()
 	}
@@ -199,7 +193,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	// it means we still didn't received that status update message
 	// TODO here we're using interval for simplicity,
 	//  but we may need to find another way to uniquely identify a configuration (hash of the in memory object?)
-	if ackedInterval, ok := r.getLastUpdate(ra); !ok || ackedInterval != actualInterval {
+	if ackedInterval, ok := r.statusUpdateStore.GetLastUpdate(src.UID); !ok || ackedInterval != actualInterval {
 		return nil
 	}
 
@@ -223,49 +217,10 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSourc
 	return nil
 }
 
-func (r *Reconciler) controlMessageHandler(ctx context.Context, event cloudevents.Event, deploymentName string, srcName string, srcNamespace string) {
-	logger := logging.FromContext(ctx)
-
-	if event.Type() == controlStatusUpdateType {
-		// We're good to go now, let's signal that and re-enqueue
-		var intervalStr string
-		err := event.ExtensionAs("interval", &intervalStr)
-		if err != nil {
-			logger.Errorf("Cannot read the set interval: %v", err)
-		}
-
-		interval, err := time.ParseDuration(intervalStr)
-		if err != nil {
-			logger.Errorf("Cannot parse the set interval (sounds like a programming error of the adapter): %w", err)
-		}
-
-		// Register the update
-		r.lastReceivedStatusUpdateLock.Lock()
-		r.lastReceivedStatusUpdate[deploymentName] = interval
-		r.lastReceivedStatusUpdateLock.Unlock()
-
-		logger.Infof("Registered new interval for '%s' in namespace '%s': %s", srcName, srcNamespace, interval)
-
-		// Trigger the reconciler again
-		r.enqueueKey(types.NamespacedName{Name: srcName, Namespace: srcNamespace})
-
-		return
-	}
-
-	logger.Warnw("Received an unknown message, I don't know what to do with it", zap.Stringer("event", event))
-}
-
 func (r *Reconciler) getLastSentInterval(dep *appsv1.Deployment) (time.Duration, bool) {
 	r.lastIntervalUpdateSentLock.Lock()
 	defer r.lastIntervalUpdateSentLock.Unlock()
 	t, ok := r.lastIntervalUpdateSent[dep.Name]
-	return t, ok
-}
-
-func (r *Reconciler) getLastUpdate(dep *appsv1.Deployment) (time.Duration, bool) {
-	r.lastReceivedStatusUpdateLock.Lock()
-	defer r.lastReceivedStatusUpdateLock.Unlock()
-	t, ok := r.lastReceivedStatusUpdate[dep.Name]
 	return t, ok
 }
 
