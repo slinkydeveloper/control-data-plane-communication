@@ -21,6 +21,7 @@ import (
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"knative.dev/eventing/pkg/adapter/v2"
@@ -32,9 +33,6 @@ import (
 type envConfig struct {
 	// Include the standard adapter.EnvConfig used by all adapters.
 	adapter.EnvConfig
-
-	// Interval between events, for example "5s", "100ms"
-	Interval time.Duration `envconfig:"INTERVAL" required:"true"`
 }
 
 func NewEnv() adapter.EnvConfigAccessor { return &envConfig{} }
@@ -72,6 +70,36 @@ func (a *Adapter) newEvent() cloudevents.Event {
 	return event
 }
 
+func (a *Adapter) handleControlMessage(ctx context.Context, controlMessage controlprotocol.ControlMessage) {
+	// Here we need some checks on the type of inbound event etc, but we don't care for the PoC
+	var newInterval string
+	err := controlMessage.Event().ExtensionAs("newinterval", &newInterval)
+	if err != nil {
+		logging.FromContext(ctx).Errorf("Cannot read the new interval: %v", err)
+	}
+
+	interval, err := time.ParseDuration(newInterval)
+	if err != nil {
+		logging.FromContext(ctx).Errorf("Cannot parse the new interval. This should not happen, some controller bug?: %v", err)
+	}
+
+	a.intervalMutex.Lock()
+	a.interval = interval
+	logging.FromContext(ctx).Infof("New interval set %v", a.interval)
+	a.intervalMutex.Unlock()
+
+	controlMessage.Ack()
+
+	updateDoneEvent := cloudevents.NewEvent()
+	updateDoneEvent.SetID(uuid.New().String())
+	updateDoneEvent.SetType("statusupdate")
+	updateDoneEvent.SetExtension("interval", interval.String())
+	err = a.controlServer.SendAndWaitForAck(updateDoneEvent)
+	if err != nil {
+		logging.FromContext(ctx).Errorf("Something is broken in the update event: %v", err)
+	}
+}
+
 // Start runs the adapter.
 // Returns if ctx is cancelled or Send() returns an error.
 func (a *Adapter) Start(ctx context.Context) (err error) {
@@ -82,26 +110,16 @@ func (a *Adapter) Start(ctx context.Context) (err error) {
 	}
 	logging.FromContext(ctx).Info("Control server started")
 
+	// Now we need to wait for the first message
+	logging.FromContext(ctx).Infof("Waiting for the first interval to set")
+	firstUpdate := <-a.controlServer.InboundMessages()
+
+	a.handleControlMessage(ctx, firstUpdate)
+
 	// When receiving new interval changes, modify the interval value
 	go func() {
 		for controlMessage := range a.controlServer.InboundMessages() {
-			// Here we need some checks on the type of inbound event etc, but we don't care for the PoC
-			var newInterval string
-			err := controlMessage.Event().ExtensionAs("newinterval", &newInterval)
-			if err != nil {
-				logging.FromContext(ctx).Errorf("Cannot read the new interval: %v", err)
-			}
-
-			a.intervalMutex.Lock()
-			a.interval, err = time.ParseDuration(newInterval)
-			if err != nil {
-				logging.FromContext(ctx).Errorf("Cannot parse the new interval: %v", err)
-			} else {
-				logging.FromContext(ctx).Infof("New interval set %v", a.interval)
-			}
-			a.intervalMutex.Unlock()
-
-			controlMessage.Ack()
+			a.handleControlMessage(ctx, controlMessage)
 		}
 	}()
 
@@ -129,11 +147,9 @@ func (a *Adapter) Start(ctx context.Context) (err error) {
 }
 
 func NewAdapter(ctx context.Context, aEnv adapter.EnvConfigAccessor, ceClient cloudevents.Client) adapter.Adapter {
-	env := aEnv.(*envConfig) // Will always be our own envConfig type
 	logger := logging.FromContext(ctx)
-	logger.Infow("Heartbeat example", zap.Duration("interval", env.Interval))
 	return &Adapter{
-		interval: env.Interval,
+		interval: 0,
 		client:   ceClient,
 		logger:   logger,
 	}

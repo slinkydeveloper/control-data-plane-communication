@@ -31,11 +31,14 @@ const (
 
 	// SampleConditionDeployed has status True when the SampleSource has had it's deployment created.
 	SampleConditionDeployed apis.ConditionType = "Deployed"
+
+	SampleConfigurationPropagated apis.ConditionType = "IntervalPropagated"
 )
 
 var SampleCondSet = apis.NewLivingConditionSet(
 	SampleConditionSinkProvided,
 	SampleConditionDeployed,
+	SampleConfigurationPropagated,
 )
 
 // GetCondition returns the condition currently associated with the given type, or nil.
@@ -66,6 +69,14 @@ func (s *SampleSourceStatus) MarkSink(uri *apis.URL) {
 // MarkNoSink sets the condition that the source does not have a sink configured.
 func (s *SampleSourceStatus) MarkNoSink(reason, messageFormat string, messageA ...interface{}) {
 	SampleCondSet.Manage(s).MarkFalse(SampleConditionSinkProvided, reason, messageFormat, messageA...)
+}
+
+func (s *SampleSourceStatus) MarkConfigurationPropagated() {
+	SampleCondSet.Manage(s).MarkTrue(SampleConfigurationPropagated)
+}
+
+func (s *SampleSourceStatus) MarkConfigurationNotPropagated() {
+	SampleCondSet.Manage(s).MarkFalse(SampleConfigurationPropagated, "ConfigurationNotPropagated", "SampleSource configuration not propagated to the data plane")
 }
 
 // PropagateDeploymentAvailability uses the availability of the provided Deployment to determine if
