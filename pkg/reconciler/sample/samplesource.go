@@ -80,6 +80,8 @@ var _ reconcilersamplesource.Interface = (*Reconciler)(nil)
 
 // ReconcileKind implements Interface.ReconcileKind.
 func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSource) pkgreconciler.Event {
+	logger := logging.FromContext(ctx)
+
 	ctx = sourcesv1.WithURIResolver(ctx, r.sinkResolver)
 
 	// TODO generate mTLS stuff here
@@ -105,11 +107,11 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		}
 	}
 	if event != nil {
-		logging.FromContext(ctx).Infof("returning because event from ReconcileDeployment")
+		logger.Infof("returning because event from ReconcileDeployment")
 		return event
 	}
 
-	logging.FromContext(ctx).Infof("we have a RA deployment")
+	logger.Infof("we have a RA deployment")
 
 	// --- If connection is not established, establish one
 	var ctrl controlprotocol.ControlInterface
@@ -128,7 +130,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		// TODO configure the connection with the mTLS stuff, if not set
 
 		if len(pods.Items) == 0 {
-			logging.FromContext(ctx).Infof("returning because there is still no pod up for the deployment '%s'", ra.Name)
+			logger.Infof("returning because there is still no pod up for the deployment '%s'", ra.Name)
 			return nil
 		}
 		if len(pods.Items) > 1 {
@@ -138,7 +140,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 		podIp := pods.Items[0].Status.PodIP
 		if podIp == "" {
-			logging.FromContext(ctx).Infof("returning because there is still no pod ip for the deployment '%s'", ra.Name)
+			logger.Infof("returning because there is still no pod ip for the deployment '%s'", ra.Name)
 			return nil
 		}
 
@@ -168,7 +170,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		}()
 	}
 
-	logging.FromContext(ctx).Infof("we have a control connection")
+	logger.Infof("we have a control connection")
 
 	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
@@ -189,7 +191,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		r.lastIntervalUpdateSentLock.Unlock()
 	}
 
-	logging.FromContext(ctx).Infof("we have sent the interval update")
+	logger.Infof("we have sent the interval update")
 
 	src.Status.MarkConfigurationNotPropagated()
 
@@ -201,7 +203,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		return nil
 	}
 
-	logging.FromContext(ctx).Infof("we have received the status update")
+	logger.Infof("we have received the status update")
 
 	src.Status.MarkConfigurationPropagated()
 
@@ -222,17 +224,19 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSourc
 }
 
 func (r *Reconciler) controlMessageHandler(ctx context.Context, event cloudevents.Event, deploymentName string, srcName string, srcNamespace string) {
+	logger := logging.FromContext(ctx)
+
 	if event.Type() == controlStatusUpdateType {
 		// We're good to go now, let's signal that and re-enqueue
 		var intervalStr string
 		err := event.ExtensionAs("interval", &intervalStr)
 		if err != nil {
-			logging.FromContext(ctx).Errorf("Cannot read the set interval: %v", err)
+			logger.Errorf("Cannot read the set interval: %v", err)
 		}
 
 		interval, err := time.ParseDuration(intervalStr)
 		if err != nil {
-			logging.FromContext(ctx).Errorf("Cannot parse the set interval (sounds like a programming error of the adapter): %w", err)
+			logger.Errorf("Cannot parse the set interval (sounds like a programming error of the adapter): %w", err)
 		}
 
 		// Register the update
@@ -240,7 +244,7 @@ func (r *Reconciler) controlMessageHandler(ctx context.Context, event cloudevent
 		r.lastReceivedStatusUpdate[deploymentName] = interval
 		r.lastReceivedStatusUpdateLock.Unlock()
 
-		logging.FromContext(ctx).Infof("Registered new interval for '%s' in namespace '%s': %s", srcName, srcNamespace, interval)
+		logger.Infof("Registered new interval for '%s' in namespace '%s': %s", srcName, srcNamespace, interval)
 
 		// Trigger the reconciler again
 		r.enqueueKey(types.NamespacedName{Name: srcName, Namespace: srcNamespace})
@@ -248,7 +252,7 @@ func (r *Reconciler) controlMessageHandler(ctx context.Context, event cloudevent
 		return
 	}
 
-	logging.FromContext(ctx).Warnw("Received an unknown message, I don't know what to do with it", zap.Stringer("event", event))
+	logger.Warnw("Received an unknown message, I don't know what to do with it", zap.Stringer("event", event))
 }
 
 func (r *Reconciler) getLastSentInterval(dep *appsv1.Deployment) (time.Duration, bool) {
