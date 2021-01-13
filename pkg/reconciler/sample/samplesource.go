@@ -19,10 +19,14 @@ package sample
 import (
 	"context"
 	"fmt"
+	"sync"
+	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/google/uuid"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/types"
+
 	// k8s.io imports
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -42,71 +46,42 @@ import (
 	"knative.dev/control-data-plane-communication/pkg/reconciler/sample/resources"
 )
 
+const (
+	controlStatusUpdateType = "statusupdate"
+)
+
 // Reconciler reconciles a SampleSource object
 type Reconciler struct {
 	ReceiveAdapterImage string `envconfig:"SAMPLE_SOURCE_RA_IMAGE" required:"true"`
 
-	dr *reconciler.DeploymentReconciler
-
-	sinkResolver *resolver.URIResolver
-
+	dr             *reconciler.DeploymentReconciler
+	sinkResolver   *resolver.URIResolver
 	configAccessor reconcilersource.ConfigAccessor
+
+	// TODO we should move this to control.go, together with its logic
+	srcPodsIPs     map[string]string
+	srcPodsIPsLock sync.Mutex
+
+	controlConnections *controlprotocol.ControlConnections
+
+	lastIntervalUpdateSent     map[string]time.Duration
+	lastIntervalUpdateSentLock sync.Mutex
+
+	statusUpdateStore *StatusUpdateStore
 }
 
 // Check that our Reconciler implements Interface
 var _ reconcilersamplesource.Interface = (*Reconciler)(nil)
 
-func (r *Reconciler) UpdateInterval(ctx context.Context, src *v1alpha1.SampleSource) pkgreconciler.Event {
-	namespace := src.GetObjectMeta().GetNamespace()
-	deploymentName := resources.MakeReceiveAdapterDeploymentName(src)
-
-	_, err := r.dr.KubeClientSet.AppsV1().Deployments(namespace).Get(ctx, deploymentName, metav1.GetOptions{})
-	if apierrors.IsNotFound(err) {
-		logging.FromContext(ctx).Infof("Deployment '%s' in namespace '%s' not found", deploymentName, namespace)
-
-		// We need to create from scratch the ra and go through the usual reconcile
-		return r.ReconcileKind(ctx, src)
-	} else if err != nil {
-		return fmt.Errorf("error getting receive adapter %q: %v", deploymentName, err)
-	}
-
-	// We need to get all the pods for that ra deployment
-	pods, err := r.dr.KubeClientSet.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: resources.LabelSelector(src.Name),
-	})
-	if err != nil {
-		return fmt.Errorf("error getting receive adapter pods %q: %v", deploymentName, err)
-	}
-
-	for _, pod := range pods.Items {
-		podIp := pod.Status.PodIP
-		logging.FromContext(ctx).Infof("Updating interval for pod '%s' with ip '%s'", pod.Name, podIp)
-
-		ctrl, err := controlprotocol.ControlInterfaceFromContext(ctx, "samplesource-controller", podIp)
-		if err != nil {
-			return err
-		}
-
-		event := cloudevents.NewEvent()
-		event.SetID(uuid.New().String())
-		event.SetType("updateinterval.samplesource.control.knative.dev")
-		event.SetSource("samplesource-controller")
-		event.SetExtension("newinterval", src.Spec.Interval)
-
-		err = ctrl.SendAndWaitForAck(event)
-		if err != nil {
-			return err
-		}
-	}
-
-	return nil
-}
-
 // ReconcileKind implements Interface.ReconcileKind.
 func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSource) pkgreconciler.Event {
+	logger := logging.FromContext(ctx)
 
 	ctx = sourcesv1.WithURIResolver(ctx, r.sinkResolver)
 
+	// TODO generate mTLS stuff here
+
+	// -- Create deployment (that's the same as usual, except we don't provide the interval)
 	ra, sb, event := r.dr.ReconcileDeployment(ctx, src, makeSinkBinding(src),
 		resources.MakeReceiveAdapter(&resources.ReceiveAdapterArgs{
 			EventSource:    src.Namespace + "/" + src.Name,
@@ -127,11 +102,126 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		}
 	}
 	if event != nil {
-		logging.FromContext(ctx).Infof("returning because event from ReconcileDeployment")
+		logger.Infof("returning because event from ReconcileDeployment")
 		return event
 	}
 
+	logger.Infof("we have a RA deployment")
+
+	// --- If connection is not established, establish one
+	var ctrl controlprotocol.ControlInterface
+	if ctrl = r.controlConnections.ResolveControlInterface(ra.Name); ctrl == nil {
+		// TODO should we change this with endpoint tracking, creating a kube svc for the control endpoint?
+		//  How do we handle connections to specific pods for partitioning then?
+
+		// We need to get all the pods for that ra deployment
+		pods, err := r.dr.KubeClientSet.CoreV1().Pods(src.Namespace).List(ctx, metav1.ListOptions{
+			LabelSelector: resources.LabelSelector(src.Name),
+		})
+		if err != nil {
+			return fmt.Errorf("error getting receive adapter pods %q: %v", ra.Name, err)
+		}
+
+		// TODO configure the connection with the mTLS stuff, if not set
+
+		if len(pods.Items) == 0 {
+			logger.Infof("returning because there is still no pod up for the deployment '%s'", ra.Name)
+			return nil
+		}
+		if len(pods.Items) > 1 {
+			// No need to fix this here, out of the scope of the prototype
+			return fmt.Errorf("wrong pods number: %d", len(pods.Items))
+		}
+
+		podIp := pods.Items[0].Status.PodIP
+		if podIp == "" {
+			logger.Infof("returning because there is still no pod ip for the deployment '%s'", ra.Name)
+			return nil
+		}
+
+		// Check if there is an old ip, so we can cleanup that conn
+		r.srcPodsIPsLock.Lock()
+		if oldIP, ok := r.srcPodsIPs[string(src.UID)]; ok && oldIP != podIp {
+			r.controlConnections.RemoveConnection(ctx, string(src.UID))
+		}
+		// Update with new one
+		r.srcPodsIPs[string(src.UID)] = podIp
+		r.srcPodsIPsLock.Unlock()
+
+		ctrl, err = r.controlConnections.CreateNewControlInterface(ctx, string(src.UID), podIp)
+		if err != nil {
+			return fmt.Errorf("cannot connect to the pod: %w", err)
+		}
+
+		// We need to start the message listener for this control interface
+		srcUid := src.UID
+		srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
+		go func() {
+			for ev := range ctrl.InboundMessages() {
+				ev.Ack()
+				r.statusUpdateStore.ControlMessageHandler(ctx, ev.Event(), srcUid, srcNamespacedName)
+			}
+		}()
+	}
+
+	logger.Infof("we have a control connection")
+
+	// --- If last configuration update to that deployment doesn't contain the interval, set it
+	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
+	if old, ok := r.getLastSentInterval(ra); !ok || old != actualInterval {
+		event := cloudevents.NewEvent()
+		event.SetID(uuid.New().String())
+		event.SetType("updateinterval.samplesource.control.knative.dev")
+		event.SetSource("samplesource-controller")
+		event.SetExtension("newinterval", src.Spec.Interval)
+
+		err := ctrl.SendAndWaitForAck(event)
+		if err != nil {
+			return fmt.Errorf("cannot send the event to the pod: %w", err)
+		}
+
+		r.lastIntervalUpdateSentLock.Lock()
+		r.lastIntervalUpdateSent[ra.Name] = actualInterval
+		r.lastIntervalUpdateSentLock.Unlock()
+	}
+
+	logger.Infof("we have sent the interval update")
+
+	src.Status.MarkConfigurationNotPropagated()
+
+	// --- If last status update to that deployment doesn't contain the correct interval,
+	// it means we still didn't received that status update message
+	// TODO here we're using interval for simplicity,
+	//  but we may need to find another way to uniquely identify a configuration (hash of the in memory object?)
+	if ackedInterval, ok := r.statusUpdateStore.GetLastUpdate(src.UID); !ok || ackedInterval != actualInterval {
+		return nil
+	}
+
+	logger.Infof("we have received the status update")
+
+	src.Status.MarkConfigurationPropagated()
+
 	return nil
+}
+
+func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSource) pkgreconciler.Event {
+	// Check if there is an old ip, so we can cleanup that conn
+	r.srcPodsIPsLock.Lock()
+	if _, ok := r.srcPodsIPs[string(src.UID)]; ok {
+		r.controlConnections.RemoveConnection(ctx, string(src.UID))
+	}
+	// Update with new one
+	delete(r.srcPodsIPs, string(src.UID))
+	r.srcPodsIPsLock.Unlock()
+
+	return nil
+}
+
+func (r *Reconciler) getLastSentInterval(dep *appsv1.Deployment) (time.Duration, bool) {
+	r.lastIntervalUpdateSentLock.Lock()
+	defer r.lastIntervalUpdateSentLock.Unlock()
+	t, ok := r.lastIntervalUpdateSent[dep.Name]
+	return t, ok
 }
 
 func makeSinkBinding(src *v1alpha1.SampleSource) *sourcesv1.SinkBinding {

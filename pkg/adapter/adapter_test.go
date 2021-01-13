@@ -24,33 +24,31 @@ import (
 	cloudevents "github.com/cloudevents/sdk-go/v2"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"go.uber.org/zap"
 	"knative.dev/eventing/pkg/adapter/v2"
-	"knative.dev/pkg/logging"
 )
 
-func TestAdapter(t *testing.T) {
-	// Test sink to receive events.
-	sink := newSink(t)
-	defer sink.close()
-
-	tr, err := cloudevents.NewHTTP(cloudevents.WithTarget(sink.URL()))
-	require.NoError(t, err)
-	c, err := cloudevents.NewClient(tr, cloudevents.WithUUIDs())
-	require.NoError(t, err)
-
-	// Keep the adapter logging quiet for tests.
-	ctx := logging.WithLogger(context.Background(), zap.NewNop().Sugar())
-	a := NewAdapter(ctx, &envConfig{Interval: time.Millisecond}, c)
-	ctx, cancel := context.WithCancel(ctx)
-	go func() {
-		if err := a.Start(ctx); err != nil {
-			logging.FromContext(ctx).Errorw("failed to start adapter", zap.Error(err))
-		}
-	}()
-	defer func() { cancel() }()
-	verify(t, sink.received)
-}
+//func TestAdapter(t *testing.T) {
+//	// Test sink to receive events.
+//	sink := newSink(t)
+//	defer sink.close()
+//
+//	tr, err := cloudevents.NewHTTP(cloudevents.WithTarget(sink.URL()))
+//	require.NoError(t, err)
+//	c, err := cloudevents.NewClient(tr, cloudevents.WithUUIDs())
+//	require.NoError(t, err)
+//
+//	// Keep the adapter logging quiet for tests.
+//	ctx := logging.WithLogger(context.Background(), zap.NewNop().Sugar())
+//	a := NewAdapter(ctx, &envConfig{Interval: time.Millisecond}, c)
+//	ctx, cancel := context.WithCancel(ctx)
+//	go func() {
+//		if err := a.Start(ctx); err != nil {
+//			logging.FromContext(ctx).Errorw("failed to start adapter", zap.Error(err))
+//		}
+//	}()
+//	defer func() { cancel() }()
+//	verify(t, sink.received)
+//}
 
 func verify(t *testing.T, received chan cloudevents.Event) {
 	for _, id := range []int{0, 1, 2} {

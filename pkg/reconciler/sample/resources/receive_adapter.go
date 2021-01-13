@@ -70,7 +70,7 @@ func MakeReceiveAdapter(args *ReceiveAdapterArgs) *v1.Deployment {
 							Name:  "receive-adapter",
 							Image: args.Image,
 							Env: append(
-								makeEnv(args.EventSource, &args.Source.Spec),
+								makeEnv(args.EventSource),
 								args.AdditionalEnvs...,
 							),
 							Ports: []corev1.ContainerPort{{
@@ -85,13 +85,10 @@ func MakeReceiveAdapter(args *ReceiveAdapterArgs) *v1.Deployment {
 	}
 }
 
-func makeEnv(eventSource string, spec *v1alpha1.SampleSourceSpec) []corev1.EnvVar {
+func makeEnv(eventSource string) []corev1.EnvVar {
 	return []corev1.EnvVar{{
 		Name:  "EVENT_SOURCE",
 		Value: eventSource,
-	}, {
-		Name:  "INTERVAL",
-		Value: spec.Interval,
 	}, {
 		Name: "NAMESPACE",
 		ValueFrom: &corev1.EnvVarSource{

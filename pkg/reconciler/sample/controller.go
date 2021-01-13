@@ -18,15 +18,16 @@ package sample
 
 import (
 	"context"
+	"time"
 
-	"k8s.io/apimachinery/pkg/api/equality"
+	"k8s.io/apimachinery/pkg/types"
 	reconcilersource "knative.dev/eventing/pkg/reconciler/source"
-
-	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
-	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 
 	"github.com/kelseyhightower/envconfig"
 	"k8s.io/client-go/tools/cache"
+
+	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
+	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
@@ -35,10 +36,11 @@ import (
 
 	"knative.dev/control-data-plane-communication/pkg/reconciler"
 
-	samplesourceinformer "knative.dev/control-data-plane-communication/pkg/client/injection/informers/samples/v1alpha1/samplesource"
-	"knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	deploymentinformer "knative.dev/pkg/client/injection/kube/informers/apps/v1/deployment"
+
+	samplesourceinformer "knative.dev/control-data-plane-communication/pkg/client/injection/informers/samples/v1alpha1/samplesource"
+	"knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
 )
 
 // NewController initializes the controller and is called by the generated code
@@ -47,15 +49,17 @@ func NewController(
 	ctx context.Context,
 	cmw configmap.Watcher,
 ) *controller.Impl {
-	ctx = controlprotocol.WithControlConnections(ctx)
-
 	deploymentInformer := deploymentinformer.Get(ctx)
 	sampleSourceInformer := samplesourceinformer.Get(ctx)
 
 	r := &Reconciler{
 		dr: &reconciler.DeploymentReconciler{KubeClientSet: kubeclient.Get(ctx)},
 		// Config accessor takes care of tracing/config/logging config propagation to the receive adapter
-		configAccessor: reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
+		configAccessor:     reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
+		controlConnections: controlprotocol.New("samplesource-controller"),
+
+		srcPodsIPs:             make(map[string]string),
+		lastIntervalUpdateSent: make(map[string]time.Duration),
 	}
 	if err := envconfig.Process("", r); err != nil {
 		logging.FromContext(ctx).Panicf("required environment variable is not defined: %v", err)
@@ -64,34 +68,11 @@ func NewController(
 	impl := samplesource.NewImpl(ctx, r)
 
 	r.sinkResolver = resolver.NewURIResolver(ctx, impl.EnqueueKey)
+	r.statusUpdateStore = &StatusUpdateStore{enqueueKey: impl.EnqueueKey, lastReceivedStatusUpdate: make(map[types.UID]time.Duration)}
 
 	logging.FromContext(ctx).Info("Setting up event handlers")
 
-	sampleSourceInformer.Informer().AddEventHandler(cache.ResourceEventHandlerFuncs{
-		AddFunc: impl.Enqueue,
-		UpdateFunc: func(oldObj, newObj interface{}) {
-			// Check if only the interval is different
-			old := oldObj.(*v1alpha1.SampleSource)
-			new := newObj.(*v1alpha1.SampleSource)
-			cpy := old.DeepCopy()
-			cpy.Spec.Interval = new.Spec.Interval
-
-			logging.FromContext(ctx).Infof("Received update request\nOld: %v\nNew: %v", oldObj, newObj)
-
-			if equality.Semantic.DeepEqual(cpy.Status, new.Status) {
-				logging.FromContext(ctx).Infof("Only interval is different")
-
-				// Only interval is different
-				if err := r.UpdateInterval(ctx, new); err != nil {
-					logging.FromContext(ctx).Errorf("Error while updating the interval: %v", err)
-				}
-			} else {
-				logging.FromContext(ctx).Infof("Everything is different")
-				impl.Enqueue(newObj)
-			}
-		},
-		DeleteFunc: impl.Enqueue,
-	})
+	sampleSourceInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
 
 	deploymentInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: controller.FilterControllerGK(v1alpha1.Kind("SampleSource")),
