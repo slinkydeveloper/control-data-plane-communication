@@ -2,57 +2,49 @@ package controlprotocol
 
 import (
 	"context"
-	"net/http"
+	"net"
+	"sync"
 	"time"
 
-	cews "github.com/cloudevents/sdk-go/protocol/ws/v2"
 	"knative.dev/pkg/logging"
 )
 
-type controlHandler struct {
-	ctx         context.Context
-	ctrlService *controlService
+var listenConfig = net.ListenConfig{
+	KeepAlive: 30 * time.Second,
 }
 
-func (cs *controlHandler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	p, err := cews.Accept(cs.ctx, writer, request, nil)
+func StartControlServer(ctx context.Context) (Service, error) {
+	ln, err := listenConfig.Listen(ctx, "tcp", ":9000")
 	if err != nil {
-		logging.FromContext(cs.ctx).Errorf("Error while accepting a new control connection")
-		writer.WriteHeader(http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 
-	logging.FromContext(cs.ctx).Debugf("New link established")
+	tcpConn := newServerTcpConnection(ctx)
+	ctrlService := newService(ctx, tcpConn)
 
-	cs.ctrlService.blockOnPolling(cs.ctx, p)
-
-	_ = p.Close(cs.ctx)
-}
-
-func StartControlServer(ctx context.Context, source string) (ControlInterface, error) {
-	ctrlService := newControlService(ctx, source)
-
-	server := &http.Server{
-		Addr:         ":9000",
-		Handler:      &controlHandler{ctx: ctx, ctrlService: ctrlService},
-		ReadTimeout:  time.Second * 10,
-		WriteTimeout: time.Second * 10,
-	}
-
+	once := sync.Once{}
 	go func() {
-		err := server.ListenAndServe()
-		if err == http.ErrServerClosed {
-			return
-		}
-		if err != nil {
-			logging.FromContext(ctx).Errorf("Error while closing the control server: %v", err)
+		for {
+			conn, err := ln.Accept()
+			logging.FromContext(ctx).Debugf("Accepting new control connection from %s", conn.RemoteAddr())
+			if err != nil {
+				logging.FromContext(ctx).Warnf("Error while accepting the connection: %s", err)
+			} else {
+				tcpConn.setConn(conn)
+			}
+
+			once.Do(tcpConn.startPolling)
+
+			select {
+			case <-ctx.Done():
+				logging.FromContext(ctx).Infof("Closing control server")
+				err := ln.Close()
+				if err != nil {
+					logging.FromContext(ctx).Warnf("Error while closing the server: %s", err)
+				}
+			default:
+			}
 		}
 	}()
-
-	go func() {
-		<-ctx.Done()
-		_ = server.Shutdown(ctx)
-	}()
-
 	return ctrlService, nil
 }

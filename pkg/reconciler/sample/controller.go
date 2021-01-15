@@ -56,7 +56,7 @@ func NewController(
 		dr: &reconciler.DeploymentReconciler{KubeClientSet: kubeclient.Get(ctx)},
 		// Config accessor takes care of tracing/config/logging config propagation to the receive adapter
 		configAccessor:     reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
-		controlConnections: controlprotocol.New("samplesource-controller"),
+		controlConnections: controlprotocol.NewControlPlaneConnectionPool("samplesource-controller"),
 
 		srcPodsIPs:             make(map[string]string),
 		lastIntervalUpdateSent: make(map[string]time.Duration),

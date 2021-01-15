@@ -22,8 +22,6 @@ import (
 	"sync"
 	"time"
 
-	cloudevents "github.com/cloudevents/sdk-go/v2"
-	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/types"
 
@@ -41,13 +39,10 @@ import (
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
+	"knative.dev/control-data-plane-communication/pkg/control"
 	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 	"knative.dev/control-data-plane-communication/pkg/reconciler"
 	"knative.dev/control-data-plane-communication/pkg/reconciler/sample/resources"
-)
-
-const (
-	controlStatusUpdateType = "statusupdate"
 )
 
 // Reconciler reconciles a SampleSource object
@@ -62,7 +57,7 @@ type Reconciler struct {
 	srcPodsIPs     map[string]string
 	srcPodsIPsLock sync.Mutex
 
-	controlConnections *controlprotocol.ControlConnections
+	controlConnections *controlprotocol.ControlPlaneConnectionPool
 
 	lastIntervalUpdateSent     map[string]time.Duration
 	lastIntervalUpdateSentLock sync.Mutex
@@ -109,8 +104,9 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	logger.Infof("we have a RA deployment")
 
 	// --- If connection is not established, establish one
-	var ctrl controlprotocol.ControlInterface
+	var ctrl controlprotocol.Service
 	if ctrl = r.controlConnections.ResolveControlInterface(ra.Name); ctrl == nil {
+		logger.Infof("Creating a new control connection")
 		// TODO should we change this with endpoint tracking, creating a kube svc for the control endpoint?
 		//  How do we handle connections to specific pods for partitioning then?
 
@@ -142,13 +138,14 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		// Check if there is an old ip, so we can cleanup that conn
 		r.srcPodsIPsLock.Lock()
 		if oldIP, ok := r.srcPodsIPs[string(src.UID)]; ok && oldIP != podIp {
+			logger.Infof("A control connection already existed, pointing to %s, while now we will create a connection pointing to %s", oldIP, podIp)
 			r.controlConnections.RemoveConnection(ctx, string(src.UID))
 		}
 		// Update with new one
 		r.srcPodsIPs[string(src.UID)] = podIp
 		r.srcPodsIPsLock.Unlock()
 
-		ctrl, err = r.controlConnections.CreateNewControlInterface(ctx, string(src.UID), podIp)
+		ctrl, err = r.controlConnections.DialControlService(ctx, string(src.UID), podIp)
 		if err != nil {
 			return fmt.Errorf("cannot connect to the pod: %w", err)
 		}
@@ -156,12 +153,10 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		// We need to start the message listener for this control interface
 		srcUid := src.UID
 		srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
-		go func() {
-			for ev := range ctrl.InboundMessages() {
-				ev.Ack()
-				r.statusUpdateStore.ControlMessageHandler(ctx, ev.Event(), srcUid, srcNamespacedName)
-			}
-		}()
+		ctrl.InboundMessageHandler(controlprotocol.ControlMessageHandlerFunc(func(ctx context.Context, message controlprotocol.ControlMessage) {
+			message.Ack()
+			r.statusUpdateStore.ControlMessageHandler(ctx, message.Headers().OpCode(), message.Payload(), srcUid, srcNamespacedName)
+		}))
 	}
 
 	logger.Infof("we have a control connection")
@@ -169,13 +164,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
 	if old, ok := r.getLastSentInterval(ra); !ok || old != actualInterval {
-		event := cloudevents.NewEvent()
-		event.SetID(uuid.New().String())
-		event.SetType("updateinterval.samplesource.control.knative.dev")
-		event.SetSource("samplesource-controller")
-		event.SetExtension("newinterval", src.Spec.Interval)
-
-		err := ctrl.SendAndWaitForAck(event)
+		err := ctrl.SendAndWaitForAck(control.UpdateIntervalOpCode, []byte(src.Spec.Interval))
 		if err != nil {
 			return fmt.Errorf("cannot send the event to the pod: %w", err)
 		}
