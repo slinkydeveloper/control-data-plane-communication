@@ -75,7 +75,7 @@ type service struct {
 
 	connection Connection
 
-	waitingAcksMutex sync.RWMutex
+	waitingAcksMutex sync.Mutex
 	waitingAcks      map[uuid.UUID]chan interface{}
 
 	handlerMutex sync.RWMutex
@@ -124,7 +124,7 @@ func (c *service) SendAndWaitForAck(opcode uint8, payload []byte) error {
 			return nil
 		case <-c.ctx.Done():
 			logging.FromContext(c.ctx).Warnf("Dropping message because context cancelled: %s", msg.UUID().String())
-			return nil
+			return c.ctx.Err()
 		case <-time.After(controlServiceSendTimeout):
 			logging.FromContext(c.ctx).Debugf("Timeout waiting for the ack, retrying to send: %s", msg.UUID().String())
 		}
@@ -174,11 +174,12 @@ func (c *service) startPolling() {
 func (c *service) accept(msg *InboundMessage) {
 	if msg.opcode == AckOpCode {
 		// Propagate the ack
-		c.waitingAcksMutex.RLock()
+		c.waitingAcksMutex.Lock()
 		ackCh := c.waitingAcks[msg.uuid]
-		c.waitingAcksMutex.RUnlock()
+		c.waitingAcksMutex.Unlock()
 		if ackCh != nil {
 			close(ackCh)
+			logging.FromContext(c.ctx).Debugf("Acked message: %s", msg.UUID().String())
 		} else {
 			logging.FromContext(c.ctx).Debugf("Ack received but no channel available: %s", msg.UUID().String())
 		}

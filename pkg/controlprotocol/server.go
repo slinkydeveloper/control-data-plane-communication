@@ -26,24 +26,29 @@ func StartControlServer(ctx context.Context) (Service, error) {
 	go func() {
 		for {
 			conn, err := ln.Accept()
-			logging.FromContext(ctx).Debugf("Accepting new control connection from %s", conn.RemoteAddr())
 			if err != nil {
-				logging.FromContext(ctx).Warnf("Error while accepting the connection: %s", err)
-			} else {
-				tcpConn.setConn(conn)
+				logging.FromContext(ctx).Warnf("Error while accepting the connection, closing the accept loop: %s", err)
+				return
 			}
-
+			logging.FromContext(ctx).Debugf("Accepting new control connection from %s", conn.RemoteAddr())
+			tcpConn.setConn(conn)
 			once.Do(tcpConn.startPolling)
-
-			select {
-			case <-ctx.Done():
-				logging.FromContext(ctx).Infof("Closing control server")
-				err := ln.Close()
-				if err != nil {
-					logging.FromContext(ctx).Warnf("Error while closing the server: %s", err)
-				}
-			default:
-			}
+		}
+	}()
+	go func() {
+		<-ctx.Done()
+		logging.FromContext(ctx).Infof("Closing control server")
+		tcpConn.connMutex.RLock()
+		err := tcpConn.conn.Close()
+		tcpConn.connMutex.RUnlock()
+		logging.FromContext(ctx).Infof("Connection closed")
+		if err != nil {
+			logging.FromContext(ctx).Warnf("Error while closing the connection: %s", err)
+		}
+		err = ln.Close()
+		logging.FromContext(ctx).Infof("Listener closed")
+		if err != nil {
+			logging.FromContext(ctx).Warnf("Error while closing the server: %s", err)
 		}
 	}()
 	return ctrlService, nil

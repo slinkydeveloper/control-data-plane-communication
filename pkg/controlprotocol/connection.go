@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"strings"
 	"sync"
 	"time"
 
@@ -171,9 +172,11 @@ func (t *clientTcpConnection) handleError(err error) bool {
 	}
 
 	// Check connection closed https://stackoverflow.com/questions/12741386/how-to-know-tcp-connection-is-closed-in-net-package
-	if errors.Is(err, io.EOF) {
+	if isDisconnection(err) {
 		// We need a new conn
 		// TODO there could be a race condition here because the two goroutines might try at the same time to connect here!
+		//  We need a new boy that handles reconnections, because here the conn could be broken completely and we need a way to stop
+		//  everything in that case!
 		t.connMutex.Lock()
 		t.conn, err = tryDial(t.ctx, t.conn.RemoteAddr().String(), clientReconnectionRetry, clientDialRetryInterval)
 		t.connMutex.Unlock()
@@ -185,8 +188,13 @@ func (t *clientTcpConnection) handleError(err error) bool {
 	}
 
 	// Something bad happened
-	t.errors <- err
-	return false
+	select {
+	case <-t.ctx.Done():
+		return false
+	default:
+		t.errors <- err
+		return false
+	}
 }
 
 type serverTcpConnection struct {
@@ -209,6 +217,7 @@ func (t *serverTcpConnection) setConn(conn net.Conn) {
 	logging.FromContext(t.ctx).Infof("Setting new conn: %s", conn.RemoteAddr())
 	t.connMutex.Lock()
 	if t.conn != nil {
+		logging.FromContext(t.ctx).Infof("Another connection was already there, closing: %s", t.conn.RemoteAddr())
 		err := t.conn.Close()
 		if err != nil {
 			logging.FromContext(t.ctx).Warnf("Error while closing the previous connection: %s", err)
@@ -255,8 +264,15 @@ func (t *serverTcpConnection) startPolling() {
 						}
 					}
 					// Check connection closed https://stackoverflow.com/questions/12741386/how-to-know-tcp-connection-is-closed-in-net-package
-					if errors.Is(err, io.EOF) {
+					if isDisconnection(err) {
 						t.handleDisconnection()
+						// Re-enqueue the message if the context is not done
+						select {
+						case <-t.ctx.Done(): // No need to close here, it will close at next iteration
+							break
+						default:
+							t.outboundMessageChannel <- msg
+						}
 						continue
 					}
 					// Something bad happened, but we can retry
@@ -266,7 +282,7 @@ func (t *serverTcpConnection) startPolling() {
 					t.errors <- fmt.Errorf("write retry exceeded. msg %s not delivered. last error: %v", msg.UUID(), err)
 				}
 			case <-t.ctx.Done():
-				logging.FromContext(t.ctx).Debugf("Context closed, closing outbound polling loop of tcp connection")
+				logging.FromContext(t.ctx).Debugf("Context closed, closing outbound polling loop of server tcp connection")
 				return
 			}
 		}
@@ -277,21 +293,17 @@ func (t *serverTcpConnection) startPolling() {
 			err := t.read()
 			if err != nil {
 				// Check connection closed https://stackoverflow.com/questions/12741386/how-to-know-tcp-connection-is-closed-in-net-package
-				if errors.Is(err, io.EOF) {
+				if isDisconnection(err) {
 					t.handleDisconnection()
-					continue
-				}
-
-				// Everything is bad except transient errors and io.EOF
-				if !isTransientError(err) {
-					// Something bad happened, but we can retry
+				} else if !isTransientError(err) {
+					// Everything is bad except transient errors and io.EOF
 					t.errors <- err
 				}
 			}
 
 			select {
 			case <-t.ctx.Done():
-				logging.FromContext(t.ctx).Debugf("Context closed, closing inbound polling loop of tcp connection")
+				logging.FromContext(t.ctx).Debugf("Context closed, closing inbound polling loop of server tcp connection")
 				return
 			default:
 				continue
@@ -311,5 +323,17 @@ func isTransientError(err error) bool {
 			return true
 		}
 	}
+	return false
+}
+
+func isDisconnection(err error) bool {
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+
+	if neterr, ok := err.(*net.OpError); ok && strings.Contains(neterr.Error(), "close") {
+		return true
+	}
+
 	return false
 }

@@ -22,8 +22,12 @@ func tryDial(ctx context.Context, target string, retries int, interval time.Dura
 			// Set some stuff
 			return conn, nil
 		}
-		logging.FromContext(ctx).Warnf("Error while trying to connect %v, retrying", err)
-		time.Sleep(interval)
+		logging.FromContext(ctx).Warnf("Error while trying to connect %v", err)
+		select {
+		case <-ctx.Done():
+			return nil, err
+		case <-time.After(interval):
+		}
 	}
 	return nil, err
 }
