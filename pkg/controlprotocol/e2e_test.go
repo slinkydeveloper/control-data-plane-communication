@@ -18,7 +18,7 @@ func TestStartClientAndServer(t *testing.T) {
 
 	_, err := StartControlServer(ctx)
 	require.NoError(t, err)
-	_, err = startClientService(ctx, "localhost")
+	_, err = StartControlClient(ctx, "localhost")
 	require.NoError(t, err)
 }
 
@@ -33,7 +33,7 @@ func TestE2EServerToClient(t *testing.T) {
 		require.NoError(t, err)
 	}))
 
-	client, err := startClientService(ctx, "localhost")
+	client, err := StartControlClient(ctx, "localhost")
 	require.NoError(t, err)
 
 	wg := sync.WaitGroup{}
@@ -60,7 +60,7 @@ func TestE2EClientToServer(t *testing.T) {
 
 	server, err := StartControlServer(ctx)
 	require.NoError(t, err)
-	client, err := startClientService(ctx, "localhost")
+	client, err := StartControlClient(ctx, "localhost")
 	require.NoError(t, err)
 
 	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
@@ -92,7 +92,7 @@ func TestE2EServerToClientAndBack(t *testing.T) {
 	server, err := StartControlServer(ctx)
 	require.NoError(t, err)
 
-	client, err := startClientService(ctx, "localhost")
+	client, err := StartControlClient(ctx, "localhost")
 	require.NoError(t, err)
 
 	wg := sync.WaitGroup{}
@@ -138,7 +138,7 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 
 	server, err := StartControlServer(serverCtx)
 	require.NoError(t, err)
-	client, err := startClientService(clientCtx, "localhost")
+	client, err := StartControlClient(clientCtx, "localhost")
 	require.NoError(t, err)
 
 	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
@@ -168,7 +168,7 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 
 	clientCtx2, clientCancelFn2 := context.WithCancel(ctx)
 	t.Cleanup(clientCancelFn2)
-	client2, err := startClientService(clientCtx2, "localhost")
+	client2, err := StartControlClient(clientCtx2, "localhost")
 	require.NoError(t, err)
 
 	client2.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
@@ -181,7 +181,7 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 }
 
 func TestE2EClientToServerWithServerStop(t *testing.T) {
-	logger, _ := zap.NewDevelopment(zap.AddStacktrace(zap.DebugLevel))
+	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 	clientCtx, clientCancelFn := context.WithCancel(ctx)
 	serverCtx, serverCancelFn := context.WithCancel(ctx)
@@ -190,7 +190,7 @@ func TestE2EClientToServerWithServerStop(t *testing.T) {
 
 	server, err := StartControlServer(serverCtx)
 	require.NoError(t, err)
-	client, err := startClientService(clientCtx, "localhost")
+	client, err := StartControlClient(clientCtx, "localhost")
 	require.NoError(t, err)
 
 	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
@@ -216,7 +216,7 @@ func TestE2EClientToServerWithServerStop(t *testing.T) {
 
 	serverCancelFn()
 
-	time.Sleep(1 * time.Second)
+	time.Sleep(500 * time.Millisecond)
 
 	serverCtx2, serverCancelFn2 := context.WithCancel(ctx)
 	t.Cleanup(serverCancelFn2)
@@ -247,7 +247,7 @@ func TestE2ETryToBreak(t *testing.T) {
 	server, err := StartControlServer(ctx)
 	require.NoError(t, err)
 
-	client, err := startClientService(ctx, "localhost")
+	client, err := StartControlClient(ctx, "localhost")
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup

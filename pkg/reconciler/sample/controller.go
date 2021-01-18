@@ -20,7 +20,6 @@ import (
 	"context"
 	"time"
 
-	"k8s.io/apimachinery/pkg/types"
 	reconcilersource "knative.dev/eventing/pkg/reconciler/source"
 
 	"github.com/kelseyhightower/envconfig"
@@ -58,7 +57,6 @@ func NewController(
 		configAccessor:     reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
 		controlConnections: controlprotocol.NewControlPlaneConnectionPool("samplesource-controller"),
 
-		srcPodsIPs:             make(map[string]string),
 		lastIntervalUpdateSent: make(map[string]time.Duration),
 	}
 	if err := envconfig.Process("", r); err != nil {
@@ -68,7 +66,7 @@ func NewController(
 	impl := samplesource.NewImpl(ctx, r)
 
 	r.sinkResolver = resolver.NewURIResolver(ctx, impl.EnqueueKey)
-	r.statusUpdateStore = &StatusUpdateStore{enqueueKey: impl.EnqueueKey, lastReceivedStatusUpdate: make(map[types.UID]time.Duration)}
+	r.statusUpdateStore = &StatusUpdateStore{enqueueKey: impl.EnqueueKey, lastReceivedStatusUpdate: make(map[string]time.Duration)}
 
 	logging.FromContext(ctx).Info("Setting up event handlers")
 

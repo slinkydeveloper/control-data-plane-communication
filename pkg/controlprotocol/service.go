@@ -10,11 +10,6 @@ import (
 	"knative.dev/pkg/logging"
 )
 
-const (
-	controlServiceSendTimeout = 10 * time.Second
-	controlServiceSendRetries = 5
-)
-
 type ControlMessage struct {
 	inboundMessage *InboundMessage
 	ackFunc        func()
@@ -117,21 +112,18 @@ func (c *service) SendAndWaitForAck(opcode uint8, payload []byte) error {
 		c.waitingAcksMutex.Unlock()
 	}()
 
-	for i := 0; i < controlServiceSendRetries; i++ {
-		c.connection.OutboundMessages() <- &msg
-		select {
-		case <-ackCh:
-			return nil
-		case <-c.ctx.Done():
-			logging.FromContext(c.ctx).Warnf("Dropping message because context cancelled: %s", msg.UUID().String())
-			return c.ctx.Err()
-		case <-time.After(controlServiceSendTimeout):
-			logging.FromContext(c.ctx).Debugf("Timeout waiting for the ack, retrying to send: %s", msg.UUID().String())
-		}
+	c.connection.OutboundMessages() <- &msg
+
+	select {
+	case <-ackCh:
+		return nil
+	case <-c.ctx.Done():
+		logging.FromContext(c.ctx).Warnf("Dropping message because context cancelled: %s", msg.UUID().String())
+		return c.ctx.Err()
+	case <-time.After(controlServiceSendTimeout):
+		logging.FromContext(c.ctx).Debugf("Timeout waiting for the ack, retrying to send: %s", msg.UUID().String())
+		return fmt.Errorf("retry exceeded for outgoing message: %s", msg.UUID().String())
 	}
-
-	return fmt.Errorf("retry exceeded for outgoing message: %s", msg.UUID().String())
-
 }
 
 func (c *service) InboundMessageHandler(handler ControlMessageHandler) {
@@ -155,14 +147,16 @@ func (c *service) startPolling() {
 					logging.FromContext(c.ctx).Debugf("InboundMessages channel closed, closing the polling")
 					return
 				}
-				c.accept(msg)
+				go func() {
+					c.accept(msg)
+				}()
 			case err, ok := <-c.connection.Errors():
 				if !ok {
 					logging.FromContext(c.ctx).Debugf("Errors channel closed")
 				}
-				c.errorHandlerMutex.RLock()
-				c.errorHandler.HandleServiceError(c.ctx, err)
-				c.errorHandlerMutex.RUnlock()
+				go func() {
+					c.acceptError(err)
+				}()
 			case <-c.ctx.Done():
 				logging.FromContext(c.ctx).Debugf("Context closed, closing polling loop of control service")
 				return
@@ -193,4 +187,10 @@ func (c *service) accept(msg *InboundMessage) {
 		c.handler.HandleControlMessage(c.ctx, ControlMessage{inboundMessage: msg, ackFunc: ackFunc})
 		c.handlerMutex.RUnlock()
 	}
+}
+
+func (c *service) acceptError(err error) {
+	c.errorHandlerMutex.RLock()
+	c.errorHandler.HandleServiceError(c.ctx, err)
+	c.errorHandlerMutex.RUnlock()
 }

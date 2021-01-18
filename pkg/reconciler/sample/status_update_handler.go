@@ -16,11 +16,11 @@ import (
 type StatusUpdateStore struct {
 	enqueueKey func(name types.NamespacedName)
 
-	lastReceivedStatusUpdate     map[types.UID]time.Duration
+	lastReceivedStatusUpdate     map[string]time.Duration
 	lastReceivedStatusUpdateLock sync.Mutex
 }
 
-func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode uint8, payload []byte, uuid types.UID, srcName types.NamespacedName) {
+func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode uint8, payload []byte, podIp string, srcName types.NamespacedName) {
 	logger := logging.FromContext(ctx)
 
 	switch opcode {
@@ -33,7 +33,7 @@ func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode 
 
 		// Register the update
 		sus.lastReceivedStatusUpdateLock.Lock()
-		sus.lastReceivedStatusUpdate[uuid] = interval
+		sus.lastReceivedStatusUpdate[podIp] = interval
 		sus.lastReceivedStatusUpdateLock.Unlock()
 
 		logger.Infof("Registered new interval for '%v': %s", srcName, interval)
@@ -49,9 +49,9 @@ func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode 
 	}
 }
 
-func (sus *StatusUpdateStore) GetLastUpdate(srcUid types.UID) (time.Duration, bool) {
+func (sus *StatusUpdateStore) GetLastUpdate(podIp string) (time.Duration, bool) {
 	sus.lastReceivedStatusUpdateLock.Lock()
 	defer sus.lastReceivedStatusUpdateLock.Unlock()
-	t, ok := sus.lastReceivedStatusUpdate[srcUid]
+	t, ok := sus.lastReceivedStatusUpdate[podIp]
 	return t, ok
 }
