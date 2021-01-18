@@ -180,8 +180,13 @@ func (c *service) accept(msg *InboundMessage) {
 	} else {
 		ackFunc := func() {
 			ackMsg := newAckMessage(msg.uuid)
-			// TODO this can panic because outbound message might be closed!
-			c.connection.OutboundMessages() <- &ackMsg
+			// Before resending, check if context is not closed
+			select {
+			case <-c.ctx.Done():
+				return
+			default:
+				c.connection.OutboundMessages() <- &ackMsg
+			}
 		}
 		c.handlerMutex.RLock()
 		c.handler.HandleControlMessage(c.ctx, ControlMessage{inboundMessage: msg, ackFunc: ackFunc})
