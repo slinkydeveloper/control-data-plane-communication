@@ -156,7 +156,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
 	if old, ok := r.getLastSentInterval(connectedIp); !ok || old != actualInterval {
-		err := ctrl.SendAndWaitForAck(control.UpdateIntervalOpCode, []byte(src.Spec.Interval))
+		err := ctrl.SendAndWaitForAck(control.UpdateIntervalOpCode, control.Duration(actualInterval))
 		if err != nil {
 			return fmt.Errorf("cannot send the event to the pod: %w", err)
 		}

@@ -49,7 +49,7 @@ func TestE2EServerToClient(t *testing.T) {
 		wg.Done()
 	}))
 
-	require.NoError(t, server.SendAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
 
 	wg.Wait()
 }
@@ -80,7 +80,7 @@ func TestE2EClientToServer(t *testing.T) {
 		wg.Done()
 	}))
 
-	require.NoError(t, client.SendAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendBinaryAndWaitForAck(1, []byte("Funky!")))
 
 	wg.Wait()
 }
@@ -118,12 +118,12 @@ func TestE2EServerToClientAndBack(t *testing.T) {
 		wg.Done()
 	}))
 
-	require.NoError(t, server.SendAndWaitForAck(1, []byte("Funky!")))
-	require.NoError(t, client.SendAndWaitForAck(2, []byte("Funky2!")))
-	require.NoError(t, server.SendAndWaitForAck(1, []byte("Funky!")))
-	require.NoError(t, client.SendAndWaitForAck(2, []byte("Funky2!")))
-	require.NoError(t, server.SendAndWaitForAck(1, []byte("Funky!")))
-	require.NoError(t, client.SendAndWaitForAck(2, []byte("Funky2!")))
+	require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendBinaryAndWaitForAck(2, []byte("Funky2!")))
+	require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendBinaryAndWaitForAck(2, []byte("Funky2!")))
+	require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendBinaryAndWaitForAck(2, []byte("Funky2!")))
 
 	wg.Wait()
 }
@@ -160,7 +160,7 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 
 	// Send a message, close the client, restart it and send another message
 
-	require.NoError(t, client.SendAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendBinaryAndWaitForAck(1, []byte("Funky!")))
 
 	clientCancelFn()
 
@@ -175,7 +175,7 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 		require.NoError(t, err)
 	}))
 
-	require.NoError(t, client2.SendAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client2.SendBinaryAndWaitForAck(1, []byte("Funky!")))
 
 	wg.Wait()
 }
@@ -212,7 +212,7 @@ func TestE2EClientToServerWithServerStop(t *testing.T) {
 
 	// Send a message, close the server, restart it and send another message
 
-	require.NoError(t, client.SendAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendBinaryAndWaitForAck(1, []byte("Funky!")))
 
 	serverCancelFn()
 
@@ -233,7 +233,7 @@ func TestE2EClientToServerWithServerStop(t *testing.T) {
 		wg.Done()
 	}))
 
-	require.NoError(t, client.SendAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendBinaryAndWaitForAck(1, []byte("Funky!")))
 
 	wg.Wait()
 }
@@ -280,11 +280,11 @@ func TestE2ETryToBreak(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		if i%2 == 0 {
 			go func() {
-				require.NoError(t, server.SendAndWaitForAck(1, []byte("Funky!")))
+				require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
 			}()
 		} else {
 			go func() {
-				require.NoError(t, client.SendAndWaitForAck(2, []byte("Funky2!")))
+				require.NoError(t, client.SendBinaryAndWaitForAck(2, []byte("Funky2!")))
 			}()
 		}
 	}

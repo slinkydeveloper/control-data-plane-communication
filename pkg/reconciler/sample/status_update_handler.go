@@ -26,14 +26,15 @@ func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode 
 	switch opcode {
 	case control.StatusUpdateOpCode:
 		// We're good to go now, let's signal that and re-enqueue
-		interval, err := control.DeserializeInterval(payload)
+		var interval control.Duration
+		err := interval.UnmarshalBinary(payload)
 		if err != nil {
 			logger.Errorf("Cannot parse the set interval (sounds like a programming error of the adapter): %w", err)
 		}
 
 		// Register the update
 		sus.lastReceivedStatusUpdateLock.Lock()
-		sus.lastReceivedStatusUpdate[podIp] = interval
+		sus.lastReceivedStatusUpdate[podIp] = time.Duration(interval)
 		sus.lastReceivedStatusUpdateLock.Unlock()
 
 		logger.Infof("Registered new interval for '%v': %s", srcName, interval)

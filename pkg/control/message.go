@@ -11,10 +11,14 @@ const (
 	UpdateIntervalOpCode uint8 = 2
 )
 
-func SerializeInterval(duration time.Duration) []byte {
-	return []byte(duration.String())
+type Duration time.Duration
+
+func (d Duration) MarshalBinary() (data []byte, err error) {
+	return []byte(time.Duration(d).String()), nil
 }
 
-func DeserializeInterval(payload []byte) (time.Duration, error) {
-	return time.ParseDuration(string(payload))
+func (d *Duration) UnmarshalBinary(data []byte) error {
+	d1, err := time.ParseDuration(string(data))
+	*d = Duration(d1)
+	return err
 }

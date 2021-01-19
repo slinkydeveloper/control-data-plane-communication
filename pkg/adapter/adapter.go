@@ -84,17 +84,18 @@ func (a *Adapter) HandleControlMessage(ctx context.Context, msg controlprotocol.
 
 	switch msg.Headers().OpCode() {
 	case control.UpdateIntervalOpCode:
-		interval, err := control.DeserializeInterval(msg.Payload())
+		var interval control.Duration
+		err := interval.UnmarshalBinary(msg.Payload())
 		if err != nil {
 			a.logger.Errorf("Cannot parse the new interval. This should not happen, some controller bug?: %v", err)
 		}
 
 		a.intervalMutex.Lock()
-		a.interval = interval
+		a.interval = time.Duration(interval)
 		a.logger.Infof("Interval set %v", a.interval)
 		a.intervalMutex.Unlock()
 
-		err = a.controlServer.SendAndWaitForAck(control.StatusUpdateOpCode, control.SerializeInterval(interval))
+		err = a.controlServer.SendAndWaitForAck(control.StatusUpdateOpCode, interval)
 		if err != nil {
 			a.logger.Errorf("Something is broken in the update event: %v", err)
 		}
