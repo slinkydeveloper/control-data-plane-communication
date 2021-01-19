@@ -33,12 +33,20 @@ const (
 	SampleConditionDeployed apis.ConditionType = "Deployed"
 
 	SampleConfigurationPropagated apis.ConditionType = "IntervalPropagated"
+
+	// --- Start and stop stuff
+	SampleConditionActive apis.ConditionType = "Active"
+	ActiveReasonActive    string             = "Active"
+	ActiveReasonPausing   string             = "Pausing"
+	ActiveReasonPaused    string             = "Paused"
+	ActiveReasonResuming  string             = "Resuming"
 )
 
 var SampleCondSet = apis.NewLivingConditionSet(
 	SampleConditionSinkProvided,
 	SampleConditionDeployed,
 	SampleConfigurationPropagated,
+	SampleConditionActive,
 )
 
 // GetCondition returns the condition currently associated with the given type, or nil.
@@ -94,4 +102,24 @@ func (s *SampleSourceStatus) PropagateDeploymentAvailability(d *appsv1.Deploymen
 // IsReady returns true if the resource is ready overall.
 func (s *SampleSourceStatus) IsReady() bool {
 	return SampleCondSet.Manage(s).IsHappy()
+}
+
+func (s *SampleSourceStatus) MarkActive() {
+	SampleCondSet.Manage(s).MarkTrueWithReason(SampleConditionActive, ActiveReasonActive, "Sample source is active")
+}
+
+func (s *SampleSourceStatus) MarkPausing() {
+	SampleCondSet.Manage(s).MarkUnknown(SampleConditionActive, ActiveReasonPausing, "Sample source is pausing")
+}
+
+func (s *SampleSourceStatus) MarkPaused() {
+	SampleCondSet.Manage(s).MarkFalse(SampleConditionActive, ActiveReasonPaused, "Sample source is paused")
+}
+
+func (s *SampleSourceStatus) MarkResuming() {
+	SampleCondSet.Manage(s).MarkUnknown(SampleConditionActive, ActiveReasonResuming, "Sample source is resuming")
+}
+
+func (s *SampleSourceStatus) GetActiveStatus() string {
+	return SampleCondSet.Manage(s).GetCondition(SampleConditionActive).GetReason()
 }

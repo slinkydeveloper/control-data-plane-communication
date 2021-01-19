@@ -37,19 +37,28 @@ type envConfig struct {
 
 func NewEnv() adapter.EnvConfigAccessor { return &envConfig{} }
 
+type State uint8
+
+const (
+	Stopped State = 0
+	Running       = 1
+)
+
 // Adapter generates events at a regular interval.
 type Adapter struct {
 	client cloudevents.Client
 	logger *zap.SugaredLogger
 
-	intervalMutex sync.Mutex
+	intervalMutex sync.RWMutex
 	interval      time.Duration
 
 	nextID int
 
 	controlServer controlprotocol.Service
 
-	startPingGoroutineOnce sync.Once
+	stateMutex       sync.Mutex
+	state            State
+	closeRunningPing context.CancelFunc
 }
 
 type dataExample struct {
@@ -73,11 +82,6 @@ func (a *Adapter) newEvent() cloudevents.Event {
 }
 
 func (a *Adapter) HandleControlMessage(ctx context.Context, msg controlprotocol.ControlMessage) {
-	a.startPingGoroutineOnce.Do(func() {
-		a.logger.Debugf("Starting ping goroutine")
-		a.startPingGoroutine(ctx)
-	})
-
 	a.logger.Debugf("Received control message")
 
 	msg.Ack()
@@ -99,6 +103,21 @@ func (a *Adapter) HandleControlMessage(ctx context.Context, msg controlprotocol.
 		if err != nil {
 			a.logger.Errorf("Something is broken in the update event: %v", err)
 		}
+	case control.StopOpCode:
+		a.logger.Debugf("Received stop signal")
+		a.stateMutex.Lock()
+		if a.state == Running {
+			a.closeRunningPing()
+		}
+		a.stateMutex.Unlock()
+	case control.ResumeOpCode:
+		a.logger.Debugf("Received resume signal")
+		a.stateMutex.Lock()
+		if a.state == Stopped {
+			a.closeRunningPing = a.startPingGoroutine(ctx)
+			a.state = Running
+		}
+		a.stateMutex.Unlock()
 	default:
 		a.logger.Warnw(
 			"Received an unknown message, I don't know what to do with it",
@@ -125,30 +144,50 @@ func (a *Adapter) Start(ctx context.Context) (err error) {
 	return
 }
 
-func (a *Adapter) startPingGoroutine(ctx context.Context) {
+func (a *Adapter) startPingGoroutine(adapterCtx context.Context) context.CancelFunc {
+	loopCtx, cancelFn := context.WithCancel(context.TODO())
+
+	a.logger.Info("Starting the ping goroutine")
+	err := a.controlServer.SendSignalAndWaitForAck(control.ResumedOpCode)
+	if err != nil {
+		a.logger.Warnf("Cannot send the resumed signal! %v", err)
+	}
+
 	go func() {
-		a.intervalMutex.Lock()
+		a.intervalMutex.RLock()
 		a.logger.Infow("Starting heartbeat", zap.String("interval", a.interval.String()))
-		a.intervalMutex.Unlock()
+		a.intervalMutex.RUnlock()
 		for {
-			a.intervalMutex.Lock()
+			a.intervalMutex.RLock()
 			interval := a.interval
-			a.intervalMutex.Unlock()
+			a.intervalMutex.RUnlock()
 			select {
 			case <-time.After(interval):
 				event := a.newEvent()
 				//a.logger.Infow("Sending new event", zap.String("event", event.String()))
 				if result := a.client.Send(context.Background(), event); !cloudevents.IsACK(result) {
-					//a.logger.Infow("failed to send event", zap.String("event", event.String()), zap.Error(result))
+					a.logger.Infow("failed to send event", zap.String("event", event.String()), zap.Error(result))
 					// We got an error but it could be transient, try again next interval.
 					continue
 				}
-			case <-ctx.Done():
-				a.logger.Info("Shutting down...")
+			case <-adapterCtx.Done():
+				a.logger.Info("Shutting down adapter")
+				return
+			case <-loopCtx.Done():
+				a.logger.Info("Requested a shut down of the ping goroutine")
+				err = a.controlServer.SendSignalAndWaitForAck(control.StoppedOpCode)
+				if err != nil {
+					a.logger.Warnf("Cannot send the stopped signal! %v", err)
+				}
+				a.stateMutex.Lock()
+				a.state = Stopped
+				a.stateMutex.Unlock()
 				return
 			}
 		}
 	}()
+
+	return cancelFn
 }
 
 func NewAdapter(ctx context.Context, aEnv adapter.EnvConfigAccessor, ceClient cloudevents.Client) adapter.Adapter {
@@ -157,5 +196,6 @@ func NewAdapter(ctx context.Context, aEnv adapter.EnvConfigAccessor, ceClient cl
 		interval: 0,
 		client:   ceClient,
 		logger:   logger,
+		state:    Stopped,
 	}
 }

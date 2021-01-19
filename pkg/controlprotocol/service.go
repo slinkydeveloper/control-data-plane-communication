@@ -59,6 +59,8 @@ var LoggerErrorHandler ErrorHandlerFunc = func(ctx context.Context, err error) {
 
 // Service is the high level interface that handles send with retries and acks
 type Service interface {
+	SendSignalAndWaitForAck(opcode uint8) error
+
 	SendAndWaitForAck(opcode uint8, payload encoding.BinaryMarshaler) error
 
 	SendBinaryAndWaitForAck(opcode uint8, payload []byte) error
@@ -93,6 +95,10 @@ func newService(ctx context.Context, connection Connection) *service {
 	}
 	cs.startPolling()
 	return cs
+}
+
+func (c *service) SendSignalAndWaitForAck(opcode uint8) error {
+	return c.SendBinaryAndWaitForAck(opcode, nil)
 }
 
 func (c *service) SendAndWaitForAck(opcode uint8, payload encoding.BinaryMarshaler) error {

@@ -87,13 +87,10 @@ type SampleSourceSpec struct {
 	// units are "ns", "us" (or "µs"), "ms", "s", "m", "h". If unspecified
 	// this will default to "10s".
 	Interval string `json:"interval"`
-}
 
-const (
-	// SampleSourceConditionReady is set when the revision is starting to materialize
-	// runtime resources, and becomes true when those resources are ready.
-	SampleSourceConditionReady = apis.ConditionReady
-)
+	// Active defaults to true
+	Active *bool `json:"active,omitempty"`
+}
 
 // SampleSourceStatus communicates the observed state of the SampleSource (from the controller).
 type SampleSourceStatus struct {

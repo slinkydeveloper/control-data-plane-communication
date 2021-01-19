@@ -89,6 +89,11 @@ func (in *SampleSourceList) DeepCopyObject() runtime.Object {
 func (in *SampleSourceSpec) DeepCopyInto(out *SampleSourceSpec) {
 	*out = *in
 	in.SourceSpec.DeepCopyInto(&out.SourceSpec)
+	if in.Active != nil {
+		in, out := &in.Active, &out.Active
+		*out = new(bool)
+		**out = **in
+	}
 	return
 }
 
