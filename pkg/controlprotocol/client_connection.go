@@ -9,17 +9,12 @@ import (
 	"knative.dev/pkg/logging"
 )
 
-var dialOptions = net.Dialer{
-	KeepAlive: keepAlive,
-	Deadline:  time.Time{},
-}
-
-func StartControlClient(ctx context.Context, target string) (Service, error) {
+func StartControlClient(ctx context.Context, dialOptions *net.Dialer, target string) (Service, error) {
 	target = target + ":9000"
 	logging.FromContext(ctx).Infof("Starting control client to %s", target)
 
 	// Let's try the dial
-	conn, err := tryDial(ctx, target, clientInitialDialRetry, clientDialRetryInterval)
+	conn, err := tryDial(ctx, dialOptions, target, clientInitialDialRetry, clientDialRetryInterval)
 	if err != nil {
 		return nil, fmt.Errorf("cannot perform the initial dial to target %s: %w", target, err)
 	}
@@ -32,7 +27,7 @@ func StartControlClient(ctx context.Context, target string) (Service, error) {
 	return svc, nil
 }
 
-func tryDial(ctx context.Context, target string, retries int, interval time.Duration) (net.Conn, error) {
+func tryDial(ctx context.Context, dialOptions *net.Dialer, target string, retries int, interval time.Duration) (net.Conn, error) {
 	var conn net.Conn
 	var err error
 	for i := 0; i < retries; i++ {

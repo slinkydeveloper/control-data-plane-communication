@@ -2,11 +2,16 @@ package controlprotocol
 
 import (
 	"context"
+	"crypto/tls"
+	"net"
 	"sync"
+	"time"
 )
 
 type ControlPlaneConnectionPool struct {
-	source string
+	controllerKeyPair *KeyHolder
+	dataPlaneKeyPair  *KeyHolder
+	dialOptions       *net.Dialer
 
 	connsLock sync.Mutex
 	conns     map[string]clientServiceHolder
@@ -18,10 +23,19 @@ type clientServiceHolder struct {
 	cancelFn context.CancelFunc
 }
 
-func NewControlPlaneConnectionPool(source string) *ControlPlaneConnectionPool {
+func NewControlPlaneConnectionPool(controllerKeyPair *KeyHolder, dataPlaneKeyPair *KeyHolder) *ControlPlaneConnectionPool {
+	tlsConfig := tls.Config{}
+
+	dialOptions := &net.Dialer{
+		KeepAlive: keepAlive,
+		Deadline:  time.Time{},
+	}
+
 	return &ControlPlaneConnectionPool{
-		conns:  make(map[string]clientServiceHolder),
-		source: source,
+		controllerKeyPair: controllerKeyPair,
+		dataPlaneKeyPair:  dataPlaneKeyPair,
+		conns:             make(map[string]clientServiceHolder),
+		dialOptions:       dialOptions,
 	}
 }
 
@@ -48,7 +62,7 @@ func (cc *ControlPlaneConnectionPool) RemoveConnection(ctx context.Context, key 
 func (cc *ControlPlaneConnectionPool) DialControlService(ctx context.Context, key string, host string) (string, Service, error) {
 	// Need to start new conn
 	ctx, cancelFn := context.WithCancel(ctx)
-	newSvc, err := StartControlClient(ctx, host)
+	newSvc, err := StartControlClient(ctx, cc.dialOptions, host)
 	if err != nil {
 		cancelFn()
 		return "", nil, err
@@ -63,4 +77,12 @@ func (cc *ControlPlaneConnectionPool) DialControlService(ctx context.Context, ke
 	cc.connsLock.Unlock()
 
 	return host, newSvc, nil
+}
+
+func (cc *ControlPlaneConnectionPool) DataPlaneKeyPair() *KeyHolder {
+	return cc.dataPlaneKeyPair
+}
+
+func (cc *ControlPlaneConnectionPool) ControllerKeyPair() *KeyHolder {
+	return cc.controllerKeyPair
 }

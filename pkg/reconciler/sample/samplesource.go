@@ -73,18 +73,25 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 	ctx = sourcesv1.WithURIResolver(ctx, r.sinkResolver)
 
-	// TODO generate mTLS stuff here
+	// -- Reconcile secret
+	secret, event := r.dr.ReconcileSecret(ctx, src, resources.MakeSecret(
+		r.controlConnections.ControllerKeyPair(),
+		r.controlConnections.DataPlaneKeyPair(),
+	))
+	if event != nil {
+		logger.Infof("returning because event from ReconcileSecret")
+		return event
+	}
 
 	// -- Create deployment (that's the same as usual, except we don't provide the interval)
-	ra, sb, event := r.dr.ReconcileDeployment(ctx, src, makeSinkBinding(src),
-		resources.MakeReceiveAdapter(&resources.ReceiveAdapterArgs{
-			EventSource:    src.Namespace + "/" + src.Name,
-			Image:          r.ReceiveAdapterImage,
-			Source:         src,
-			Labels:         resources.Labels(src.Name),
-			AdditionalEnvs: r.configAccessor.ToEnvVars(), // Grab config envs for tracing/logging/metrics
-		}),
-	)
+	raArgs := &resources.ReceiveAdapterArgs{
+		EventSource:    src.Namespace + "/" + src.Name,
+		Image:          r.ReceiveAdapterImage,
+		Source:         src,
+		Labels:         resources.Labels(src.Name),
+		AdditionalEnvs: r.configAccessor.ToEnvVars(), // Grab config envs for tracing/logging/metrics
+	}
+	ra, sb, event := r.dr.ReconcileDeployment(ctx, src, makeSinkBinding(src), resources.MakeReceiveAdapter(raArgs, secret))
 	if ra != nil {
 		src.Status.PropagateDeploymentAvailability(ra)
 	}
@@ -109,8 +116,6 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	if err != nil {
 		return fmt.Errorf("error getting receive adapter pods %q: %v", ra.Name, err)
 	}
-
-	// TODO configure the connection with the mTLS stuff, if not set
 
 	if len(pods.Items) == 0 {
 		logger.Infof("returning because there is still no pod up for the deployment '%s'", ra.Name)

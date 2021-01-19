@@ -18,7 +18,7 @@ func TestStartClientAndServer(t *testing.T) {
 
 	_, err := StartControlServer(ctx)
 	require.NoError(t, err)
-	_, err = StartControlClient(ctx, "localhost")
+	_, err = StartControlClient(ctx,, "localhost")
 	require.NoError(t, err)
 }
 
@@ -33,7 +33,7 @@ func TestE2EServerToClient(t *testing.T) {
 		require.NoError(t, err)
 	}))
 
-	client, err := StartControlClient(ctx, "localhost")
+	client, err := StartControlClient(ctx,, "localhost")
 	require.NoError(t, err)
 
 	wg := sync.WaitGroup{}
@@ -60,7 +60,7 @@ func TestE2EClientToServer(t *testing.T) {
 
 	server, err := StartControlServer(ctx)
 	require.NoError(t, err)
-	client, err := StartControlClient(ctx, "localhost")
+	client, err := StartControlClient(ctx,, "localhost")
 	require.NoError(t, err)
 
 	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
@@ -92,7 +92,7 @@ func TestE2EServerToClientAndBack(t *testing.T) {
 	server, err := StartControlServer(ctx)
 	require.NoError(t, err)
 
-	client, err := StartControlClient(ctx, "localhost")
+	client, err := StartControlClient(ctx,, "localhost")
 	require.NoError(t, err)
 
 	wg := sync.WaitGroup{}
@@ -138,7 +138,7 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 
 	server, err := StartControlServer(serverCtx)
 	require.NoError(t, err)
-	client, err := StartControlClient(clientCtx, "localhost")
+	client, err := StartControlClient(clientCtx,, "localhost")
 	require.NoError(t, err)
 
 	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
@@ -168,7 +168,7 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 
 	clientCtx2, clientCancelFn2 := context.WithCancel(ctx)
 	t.Cleanup(clientCancelFn2)
-	client2, err := StartControlClient(clientCtx2, "localhost")
+	client2, err := StartControlClient(clientCtx2,, "localhost")
 	require.NoError(t, err)
 
 	client2.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
@@ -190,7 +190,7 @@ func TestE2EClientToServerWithServerStop(t *testing.T) {
 
 	server, err := StartControlServer(serverCtx)
 	require.NoError(t, err)
-	client, err := StartControlClient(clientCtx, "localhost")
+	client, err := StartControlClient(clientCtx,, "localhost")
 	require.NoError(t, err)
 
 	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
@@ -247,7 +247,7 @@ func TestE2ETryToBreak(t *testing.T) {
 	server, err := StartControlServer(ctx)
 	require.NoError(t, err)
 
-	client, err := StartControlClient(ctx, "localhost")
+	client, err := StartControlClient(ctx,, "localhost")
 	require.NoError(t, err)
 
 	var wg sync.WaitGroup

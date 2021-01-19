@@ -51,11 +51,21 @@ func NewController(
 	deploymentInformer := deploymentinformer.Get(ctx)
 	sampleSourceInformer := samplesourceinformer.Get(ctx)
 
+	controllerKeyPair, err := controlprotocol.GenerateKeyHolder()
+	if err != nil {
+		logging.FromContext(ctx).Panicf("cannot create rsa key pair: %v", err)
+	}
+
+	dataPlaneKeyPair, err := controlprotocol.GenerateKeyHolder()
+	if err != nil {
+		logging.FromContext(ctx).Panicf("cannot create rsa key pair: %v", err)
+	}
+
 	r := &Reconciler{
 		dr: &reconciler.DeploymentReconciler{KubeClientSet: kubeclient.Get(ctx)},
 		// Config accessor takes care of tracing/config/logging config propagation to the receive adapter
 		configAccessor:     reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
-		controlConnections: controlprotocol.NewControlPlaneConnectionPool("samplesource-controller"),
+		controlConnections: controlprotocol.NewControlPlaneConnectionPool(controllerKeyPair, dataPlaneKeyPair),
 
 		lastIntervalUpdateSent: make(map[string]time.Duration),
 		lastSentStateIsActive:  make(map[string]bool),
