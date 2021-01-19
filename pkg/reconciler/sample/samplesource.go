@@ -22,9 +22,6 @@ import (
 	"sync"
 	"time"
 
-	cloudevents "github.com/cloudevents/sdk-go/v2"
-	"github.com/google/uuid"
-	appsv1 "k8s.io/api/apps/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	// k8s.io imports
@@ -41,13 +38,10 @@ import (
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
+	"knative.dev/control-data-plane-communication/pkg/control"
 	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 	"knative.dev/control-data-plane-communication/pkg/reconciler"
 	"knative.dev/control-data-plane-communication/pkg/reconciler/sample/resources"
-)
-
-const (
-	controlStatusUpdateType = "statusupdate"
 )
 
 // Reconciler reconciles a SampleSource object
@@ -58,11 +52,7 @@ type Reconciler struct {
 	sinkResolver   *resolver.URIResolver
 	configAccessor reconcilersource.ConfigAccessor
 
-	// TODO we should move this to control.go, together with its logic
-	srcPodsIPs     map[string]string
-	srcPodsIPsLock sync.Mutex
-
-	controlConnections *controlprotocol.ControlConnections
+	controlConnections *controlprotocol.ControlPlaneConnectionPool
 
 	lastIntervalUpdateSent     map[string]time.Duration
 	lastIntervalUpdateSentLock sync.Mutex
@@ -108,80 +98,71 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 	logger.Infof("we have a RA deployment")
 
+	// We need to get all the pods for that ra deployment
+	pods, err := r.dr.KubeClientSet.CoreV1().Pods(src.Namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: resources.LabelSelector(src.Name),
+	})
+	if err != nil {
+		return fmt.Errorf("error getting receive adapter pods %q: %v", ra.Name, err)
+	}
+
+	// TODO configure the connection with the mTLS stuff, if not set
+
+	if len(pods.Items) == 0 {
+		logger.Infof("returning because there is still no pod up for the deployment '%s'", ra.Name)
+		return nil
+	}
+	if len(pods.Items) > 1 {
+		// No need to fix this here, out of the scope of the prototype
+		return fmt.Errorf("wrong pods number: %d", len(pods.Items))
+	}
+
+	// TODO should we change this with endpoint tracking, creating a kube svc for the control endpoint?
+	//  How do we handle connections to specific pods for partitioning then?
+	raPodIp := pods.Items[0].Status.PodIP
+	if raPodIp == "" {
+		logger.Infof("returning because there is still no pod ip for the deployment '%s'", ra.Name)
+		return nil
+	}
+
 	// --- If connection is not established, establish one
-	var ctrl controlprotocol.ControlInterface
-	if ctrl = r.controlConnections.ResolveControlInterface(ra.Name); ctrl == nil {
-		// TODO should we change this with endpoint tracking, creating a kube svc for the control endpoint?
-		//  How do we handle connections to specific pods for partitioning then?
+	connectedIp, ctrl := r.controlConnections.ResolveControlInterface(string(src.UID))
+	if ctrl != nil && connectedIp != raPodIp {
+		logger.Infof("Cleaning up old connection: %s", connectedIp)
 
-		// We need to get all the pods for that ra deployment
-		pods, err := r.dr.KubeClientSet.CoreV1().Pods(src.Namespace).List(ctx, metav1.ListOptions{
-			LabelSelector: resources.LabelSelector(src.Name),
-		})
-		if err != nil {
-			return fmt.Errorf("error getting receive adapter pods %q: %v", ra.Name, err)
-		}
+		// We need to cleanup the old conn
+		r.controlConnections.RemoveConnection(ctx, string(src.UID))
+		connectedIp = ""
+		ctrl = nil
+	}
+	if ctrl == nil {
+		logger.Infof("Creating a new control connection")
 
-		// TODO configure the connection with the mTLS stuff, if not set
-
-		if len(pods.Items) == 0 {
-			logger.Infof("returning because there is still no pod up for the deployment '%s'", ra.Name)
-			return nil
-		}
-		if len(pods.Items) > 1 {
-			// No need to fix this here, out of the scope of the prototype
-			return fmt.Errorf("wrong pods number: %d", len(pods.Items))
-		}
-
-		podIp := pods.Items[0].Status.PodIP
-		if podIp == "" {
-			logger.Infof("returning because there is still no pod ip for the deployment '%s'", ra.Name)
-			return nil
-		}
-
-		// Check if there is an old ip, so we can cleanup that conn
-		r.srcPodsIPsLock.Lock()
-		if oldIP, ok := r.srcPodsIPs[string(src.UID)]; ok && oldIP != podIp {
-			r.controlConnections.RemoveConnection(ctx, string(src.UID))
-		}
-		// Update with new one
-		r.srcPodsIPs[string(src.UID)] = podIp
-		r.srcPodsIPsLock.Unlock()
-
-		ctrl, err = r.controlConnections.CreateNewControlInterface(ctx, string(src.UID), podIp)
+		connectedIp, ctrl, err = r.controlConnections.DialControlService(ctx, string(src.UID), raPodIp)
 		if err != nil {
 			return fmt.Errorf("cannot connect to the pod: %w", err)
 		}
 
 		// We need to start the message listener for this control interface
-		srcUid := src.UID
 		srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
-		go func() {
-			for ev := range ctrl.InboundMessages() {
-				ev.Ack()
-				r.statusUpdateStore.ControlMessageHandler(ctx, ev.Event(), srcUid, srcNamespacedName)
-			}
-		}()
+		ctrl.InboundMessageHandler(controlprotocol.ControlMessageHandlerFunc(func(ctx context.Context, message controlprotocol.ControlMessage) {
+			message.Ack()
+			r.statusUpdateStore.ControlMessageHandler(ctx, message.Headers().OpCode(), message.Payload(), connectedIp, srcNamespacedName)
+		}))
 	}
 
-	logger.Infof("we have a control connection")
+	logger.Infof("we have a control connection to %s", connectedIp)
 
 	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
-	if old, ok := r.getLastSentInterval(ra); !ok || old != actualInterval {
-		event := cloudevents.NewEvent()
-		event.SetID(uuid.New().String())
-		event.SetType("updateinterval.samplesource.control.knative.dev")
-		event.SetSource("samplesource-controller")
-		event.SetExtension("newinterval", src.Spec.Interval)
-
-		err := ctrl.SendAndWaitForAck(event)
+	if old, ok := r.getLastSentInterval(connectedIp); !ok || old != actualInterval {
+		err := ctrl.SendAndWaitForAck(control.UpdateIntervalOpCode, []byte(src.Spec.Interval))
 		if err != nil {
 			return fmt.Errorf("cannot send the event to the pod: %w", err)
 		}
 
 		r.lastIntervalUpdateSentLock.Lock()
-		r.lastIntervalUpdateSent[ra.Name] = actualInterval
+		r.lastIntervalUpdateSent[connectedIp] = actualInterval
 		r.lastIntervalUpdateSentLock.Unlock()
 	}
 
@@ -193,7 +174,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	// it means we still didn't received that status update message
 	// TODO here we're using interval for simplicity,
 	//  but we may need to find another way to uniquely identify a configuration (hash of the in memory object?)
-	if ackedInterval, ok := r.statusUpdateStore.GetLastUpdate(src.UID); !ok || ackedInterval != actualInterval {
+	if ackedInterval, ok := r.statusUpdateStore.GetLastUpdate(connectedIp); !ok || ackedInterval != actualInterval {
 		return nil
 	}
 
@@ -206,21 +187,15 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSource) pkgreconciler.Event {
 	// Check if there is an old ip, so we can cleanup that conn
-	r.srcPodsIPsLock.Lock()
-	if _, ok := r.srcPodsIPs[string(src.UID)]; ok {
-		r.controlConnections.RemoveConnection(ctx, string(src.UID))
-	}
-	// Update with new one
-	delete(r.srcPodsIPs, string(src.UID))
-	r.srcPodsIPsLock.Unlock()
+	r.controlConnections.RemoveConnection(ctx, string(src.UID))
 
 	return nil
 }
 
-func (r *Reconciler) getLastSentInterval(dep *appsv1.Deployment) (time.Duration, bool) {
+func (r *Reconciler) getLastSentInterval(podIp string) (time.Duration, bool) {
 	r.lastIntervalUpdateSentLock.Lock()
 	defer r.lastIntervalUpdateSentLock.Unlock()
-	t, ok := r.lastIntervalUpdateSent[dep.Name]
+	t, ok := r.lastIntervalUpdateSent[podIp]
 	return t, ok
 }
 

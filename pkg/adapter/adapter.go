@@ -21,12 +21,12 @@ import (
 	"time"
 
 	cloudevents "github.com/cloudevents/sdk-go/v2"
-	"github.com/google/uuid"
 	"go.uber.org/zap"
 
 	"knative.dev/eventing/pkg/adapter/v2"
 	"knative.dev/pkg/logging"
 
+	"knative.dev/control-data-plane-communication/pkg/control"
 	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 )
 
@@ -47,7 +47,9 @@ type Adapter struct {
 
 	nextID int
 
-	controlServer controlprotocol.ControlInterface
+	controlServer controlprotocol.Service
+
+	startPingGoroutineOnce sync.Once
 }
 
 type dataExample struct {
@@ -70,33 +72,38 @@ func (a *Adapter) newEvent() cloudevents.Event {
 	return event
 }
 
-func (a *Adapter) handleControlMessage(ctx context.Context, controlMessage controlprotocol.ControlMessage) {
-	// Here we need some checks on the type of inbound event etc, but we don't care for the PoC
-	var newInterval string
-	err := controlMessage.Event().ExtensionAs("newinterval", &newInterval)
-	if err != nil {
-		logging.FromContext(ctx).Errorf("Cannot read the new interval: %v", err)
-	}
+func (a *Adapter) HandleControlMessage(ctx context.Context, msg controlprotocol.ControlMessage) {
+	a.startPingGoroutineOnce.Do(func() {
+		a.logger.Debugf("Starting ping goroutine")
+		a.startPingGoroutine(ctx)
+	})
 
-	interval, err := time.ParseDuration(newInterval)
-	if err != nil {
-		logging.FromContext(ctx).Errorf("Cannot parse the new interval. This should not happen, some controller bug?: %v", err)
-	}
+	a.logger.Debugf("Received control message")
 
-	a.intervalMutex.Lock()
-	a.interval = interval
-	logging.FromContext(ctx).Infof("New interval set %v", a.interval)
-	a.intervalMutex.Unlock()
+	msg.Ack()
 
-	controlMessage.Ack()
+	switch msg.Headers().OpCode() {
+	case control.UpdateIntervalOpCode:
+		interval, err := control.DeserializeInterval(msg.Payload())
+		if err != nil {
+			a.logger.Errorf("Cannot parse the new interval. This should not happen, some controller bug?: %v", err)
+		}
 
-	updateDoneEvent := cloudevents.NewEvent()
-	updateDoneEvent.SetID(uuid.New().String())
-	updateDoneEvent.SetType("statusupdate")
-	updateDoneEvent.SetExtension("interval", interval.String())
-	err = a.controlServer.SendAndWaitForAck(updateDoneEvent)
-	if err != nil {
-		logging.FromContext(ctx).Errorf("Something is broken in the update event: %v", err)
+		a.intervalMutex.Lock()
+		a.interval = interval
+		a.logger.Infof("Interval set %v", a.interval)
+		a.intervalMutex.Unlock()
+
+		err = a.controlServer.SendAndWaitForAck(control.StatusUpdateOpCode, control.SerializeInterval(interval))
+		if err != nil {
+			a.logger.Errorf("Something is broken in the update event: %v", err)
+		}
+	default:
+		a.logger.Warnw(
+			"Received an unknown message, I don't know what to do with it",
+			zap.Uint8("opcode", msg.Headers().OpCode()),
+			zap.ByteString("payload", msg.Payload()),
+		)
 	}
 }
 
@@ -104,46 +111,43 @@ func (a *Adapter) handleControlMessage(ctx context.Context, controlMessage contr
 // Returns if ctx is cancelled or Send() returns an error.
 func (a *Adapter) Start(ctx context.Context) (err error) {
 	// Start control server
-	a.controlServer, err = controlprotocol.StartControlServer(ctx, "samplesource")
+	a.controlServer, err = controlprotocol.StartControlServer(ctx)
 	if err != nil {
-		return err
+		return
 	}
-	logging.FromContext(ctx).Info("Control server started")
+	a.logger.Info("Control server started")
+	a.logger.Infof("Waiting for the first interval to set")
 
-	// Now we need to wait for the first message
-	logging.FromContext(ctx).Infof("Waiting for the first interval to set")
-	firstUpdate := <-a.controlServer.InboundMessages()
+	a.controlServer.InboundMessageHandler(a)
 
-	a.handleControlMessage(ctx, firstUpdate)
+	<-ctx.Done()
+	return
+}
 
-	// When receiving new interval changes, modify the interval value
+func (a *Adapter) startPingGoroutine(ctx context.Context) {
 	go func() {
-		for controlMessage := range a.controlServer.InboundMessages() {
-			a.handleControlMessage(ctx, controlMessage)
+		a.intervalMutex.Lock()
+		a.logger.Infow("Starting heartbeat", zap.String("interval", a.interval.String()))
+		a.intervalMutex.Unlock()
+		for {
+			a.intervalMutex.Lock()
+			interval := a.interval
+			a.intervalMutex.Unlock()
+			select {
+			case <-time.After(interval):
+				event := a.newEvent()
+				//a.logger.Infow("Sending new event", zap.String("event", event.String()))
+				if result := a.client.Send(context.Background(), event); !cloudevents.IsACK(result) {
+					//a.logger.Infow("failed to send event", zap.String("event", event.String()), zap.Error(result))
+					// We got an error but it could be transient, try again next interval.
+					continue
+				}
+			case <-ctx.Done():
+				a.logger.Info("Shutting down...")
+				return
+			}
 		}
 	}()
-
-	a.intervalMutex.Lock()
-	a.logger.Infow("Starting heartbeat", zap.String("interval", a.interval.String()))
-	a.intervalMutex.Unlock()
-	for {
-		a.intervalMutex.Lock()
-		interval := a.interval
-		a.intervalMutex.Unlock()
-		select {
-		case <-time.After(interval):
-			event := a.newEvent()
-			a.logger.Infow("Sending new event", zap.String("event", event.String()))
-			if result := a.client.Send(context.Background(), event); !cloudevents.IsACK(result) {
-				a.logger.Infow("failed to send event", zap.String("event", event.String()), zap.Error(result))
-				// We got an error but it could be transient, try again next interval.
-				continue
-			}
-		case <-ctx.Done():
-			a.logger.Info("Shutting down...")
-			return nil
-		}
-	}
 }
 
 func NewAdapter(ctx context.Context, aEnv adapter.EnvConfigAccessor, ceClient cloudevents.Client) adapter.Adapter {
