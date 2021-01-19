@@ -58,6 +58,7 @@ func NewController(
 		controlConnections: controlprotocol.NewControlPlaneConnectionPool("samplesource-controller"),
 
 		lastIntervalUpdateSent: make(map[string]time.Duration),
+		lastSentStateIsActive:  make(map[string]bool),
 	}
 	if err := envconfig.Process("", r); err != nil {
 		logging.FromContext(ctx).Panicf("required environment variable is not defined: %v", err)
@@ -66,7 +67,11 @@ func NewController(
 	impl := samplesource.NewImpl(ctx, r)
 
 	r.sinkResolver = resolver.NewURIResolver(ctx, impl.EnqueueKey)
-	r.statusUpdateStore = &StatusUpdateStore{enqueueKey: impl.EnqueueKey, lastReceivedStatusUpdate: make(map[string]time.Duration)}
+	r.statusUpdateStore = &StatusUpdateStore{
+		enqueueKey:                impl.EnqueueKey,
+		lastReceivedIntervalAcked: make(map[string]time.Duration),
+		isActive:                  make(map[string]bool),
+	}
 
 	logging.FromContext(ctx).Info("Setting up event handlers")
 

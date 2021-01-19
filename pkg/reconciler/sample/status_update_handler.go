@@ -16,8 +16,11 @@ import (
 type StatusUpdateStore struct {
 	enqueueKey func(name types.NamespacedName)
 
-	lastReceivedStatusUpdate     map[string]time.Duration
-	lastReceivedStatusUpdateLock sync.Mutex
+	lastReceivedIntervalAcked     map[string]time.Duration
+	lastReceivedIntervalAckedLock sync.Mutex
+
+	isActive      map[string]bool
+	isActiveMutex sync.Mutex
 }
 
 func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode uint8, payload []byte, podIp string, srcName types.NamespacedName) {
@@ -26,17 +29,32 @@ func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode 
 	switch opcode {
 	case control.StatusUpdateOpCode:
 		// We're good to go now, let's signal that and re-enqueue
-		interval, err := control.DeserializeInterval(payload)
+		var interval control.Duration
+		err := interval.UnmarshalBinary(payload)
 		if err != nil {
 			logger.Errorf("Cannot parse the set interval (sounds like a programming error of the adapter): %w", err)
 		}
 
 		// Register the update
-		sus.lastReceivedStatusUpdateLock.Lock()
-		sus.lastReceivedStatusUpdate[podIp] = interval
-		sus.lastReceivedStatusUpdateLock.Unlock()
+		sus.lastReceivedIntervalAckedLock.Lock()
+		sus.lastReceivedIntervalAcked[podIp] = time.Duration(interval)
+		sus.lastReceivedIntervalAckedLock.Unlock()
 
 		logger.Infof("Registered new interval for '%v': %s", srcName, interval)
+
+		// Trigger the reconciler again
+		sus.enqueueKey(srcName)
+	case control.ResumedOpCode:
+		sus.isActiveMutex.Lock()
+		sus.isActive[podIp] = true
+		sus.isActiveMutex.Unlock()
+
+		// Trigger the reconciler again
+		sus.enqueueKey(srcName)
+	case control.StoppedOpCode:
+		sus.isActiveMutex.Lock()
+		sus.isActive[podIp] = false
+		sus.isActiveMutex.Unlock()
 
 		// Trigger the reconciler again
 		sus.enqueueKey(srcName)
@@ -50,8 +68,15 @@ func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode 
 }
 
 func (sus *StatusUpdateStore) GetLastUpdate(podIp string) (time.Duration, bool) {
-	sus.lastReceivedStatusUpdateLock.Lock()
-	defer sus.lastReceivedStatusUpdateLock.Unlock()
-	t, ok := sus.lastReceivedStatusUpdate[podIp]
+	sus.lastReceivedIntervalAckedLock.Lock()
+	defer sus.lastReceivedIntervalAckedLock.Unlock()
+	t, ok := sus.lastReceivedIntervalAcked[podIp]
 	return t, ok
+}
+
+func (sus *StatusUpdateStore) GetLastActiveStatus(podIp string) (bool, bool) {
+	sus.isActiveMutex.Lock()
+	defer sus.isActiveMutex.Unlock()
+	b, ok := sus.isActive[podIp]
+	return b, ok
 }

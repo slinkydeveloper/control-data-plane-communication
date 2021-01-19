@@ -19,6 +19,7 @@ package v1alpha1
 import (
 	"context"
 
+	"k8s.io/utils/pointer"
 	"knative.dev/pkg/apis"
 )
 
@@ -34,6 +35,10 @@ func (s *SampleSource) SetDefaults(ctx context.Context) {
 	//example: If Interval is unspecified, default to "10s".
 	if s != nil && s.Spec.Interval == "" {
 		s.Spec.Interval = "10s"
+	}
+
+	if s != nil && s.Spec.Active == nil {
+		s.Spec.Active = pointer.BoolPtr(true)
 	}
 
 	// call SetDefaults against duckv1.Destination with a context of ObjectMeta of SampleSource.

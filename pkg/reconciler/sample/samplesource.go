@@ -54,6 +54,10 @@ type Reconciler struct {
 
 	controlConnections *controlprotocol.ControlPlaneConnectionPool
 
+	// TODO abstract this
+	lastSentStateIsActive map[string]bool
+	lastSentStateMutex    sync.Mutex
+	// TODO abstract this
 	lastIntervalUpdateSent     map[string]time.Duration
 	lastIntervalUpdateSentLock sync.Mutex
 
@@ -125,6 +129,8 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		return nil
 	}
 
+	// TODO lionel add your fancy MT scheduler here!
+
 	// --- If connection is not established, establish one
 	connectedIp, ctrl := r.controlConnections.ResolveControlInterface(string(src.UID))
 	if ctrl != nil && connectedIp != raPodIp {
@@ -156,7 +162,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
 	if old, ok := r.getLastSentInterval(connectedIp); !ok || old != actualInterval {
-		err := ctrl.SendAndWaitForAck(control.UpdateIntervalOpCode, []byte(src.Spec.Interval))
+		err := ctrl.SendAndWaitForAck(control.UpdateIntervalOpCode, control.Duration(actualInterval))
 		if err != nil {
 			return fmt.Errorf("cannot send the event to the pod: %w", err)
 		}
@@ -182,6 +188,53 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 	src.Status.MarkConfigurationPropagated()
 
+	// --- Reconcile active state
+	if src.Spec.Active == nil || *src.Spec.Active == true {
+		logger.Infof("Reconciling active status")
+
+		// Reconcile active
+		if sentResumeSignal, ok := r.getLastSentSignal(connectedIp); !ok || !sentResumeSignal {
+			err := ctrl.SendSignalAndWaitForAck(control.ResumeOpCode)
+			if err != nil {
+				return fmt.Errorf("cannot send the event to the pod: %w", err)
+			}
+
+			r.setLastSentSignal(connectedIp, true)
+		}
+		src.Status.MarkResuming()
+		logger.Infof("Sent resume command")
+
+		if adapterIsActive, ok := r.statusUpdateStore.GetLastActiveStatus(connectedIp); !ok || !adapterIsActive {
+			// Short-circuit because we still didn't received the status update
+			return nil
+		}
+		src.Status.MarkActive()
+		logger.Infof("Received active adapter signal")
+
+	} else {
+		logger.Infof("Reconciling stop status")
+
+		// Reconcile stop
+		if sentResumeSignal, ok := r.getLastSentSignal(connectedIp); !ok || sentResumeSignal {
+			err := ctrl.SendSignalAndWaitForAck(control.StopOpCode)
+			if err != nil {
+				return fmt.Errorf("cannot send the event to the pod: %w", err)
+			}
+
+			r.setLastSentSignal(connectedIp, false)
+		}
+		src.Status.MarkPausing()
+		logger.Infof("Sent stop command")
+
+		if adapterIsActive, ok := r.statusUpdateStore.GetLastActiveStatus(connectedIp); !ok || adapterIsActive {
+			// Short-circuit because we still didn't received the status update
+			return nil
+		}
+		src.Status.MarkPaused()
+		logger.Infof("Received paused adapter signal")
+
+	}
+
 	return nil
 }
 
@@ -197,6 +250,19 @@ func (r *Reconciler) getLastSentInterval(podIp string) (time.Duration, bool) {
 	defer r.lastIntervalUpdateSentLock.Unlock()
 	t, ok := r.lastIntervalUpdateSent[podIp]
 	return t, ok
+}
+
+func (r *Reconciler) setLastSentSignal(podIp string, active bool) {
+	r.lastSentStateMutex.Lock()
+	r.lastSentStateIsActive[podIp] = active
+	defer r.lastSentStateMutex.Unlock()
+}
+
+func (r *Reconciler) getLastSentSignal(podIp string) (bool, bool) {
+	r.lastSentStateMutex.Lock()
+	defer r.lastSentStateMutex.Unlock()
+	b, ok := r.lastSentStateIsActive[podIp]
+	return b, ok
 }
 
 func makeSinkBinding(src *v1alpha1.SampleSource) *sourcesv1.SinkBinding {

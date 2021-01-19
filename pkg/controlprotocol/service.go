@@ -2,6 +2,7 @@ package controlprotocol
 
 import (
 	"context"
+	"encoding"
 	"fmt"
 	"sync"
 	"time"
@@ -58,7 +59,11 @@ var LoggerErrorHandler ErrorHandlerFunc = func(ctx context.Context, err error) {
 
 // Service is the high level interface that handles send with retries and acks
 type Service interface {
-	SendAndWaitForAck(opcode uint8, payload []byte) error
+	SendSignalAndWaitForAck(opcode uint8) error
+
+	SendAndWaitForAck(opcode uint8, payload encoding.BinaryMarshaler) error
+
+	SendBinaryAndWaitForAck(opcode uint8, payload []byte) error
 	// This is non blocking, because a polling loop is already running inside.
 	InboundMessageHandler(handler ControlMessageHandler)
 	// This is non blocking, because a polling loop is already running inside.
@@ -92,7 +97,19 @@ func newService(ctx context.Context, connection Connection) *service {
 	return cs
 }
 
-func (c *service) SendAndWaitForAck(opcode uint8, payload []byte) error {
+func (c *service) SendSignalAndWaitForAck(opcode uint8) error {
+	return c.SendBinaryAndWaitForAck(opcode, nil)
+}
+
+func (c *service) SendAndWaitForAck(opcode uint8, payload encoding.BinaryMarshaler) error {
+	b, err := payload.MarshalBinary()
+	if err != nil {
+		return err
+	}
+	return c.SendBinaryAndWaitForAck(opcode, b)
+}
+
+func (c *service) SendBinaryAndWaitForAck(opcode uint8, payload []byte) error {
 	msg, err := NewOutboundMessage(opcode, payload)
 	if err != nil {
 		return err
