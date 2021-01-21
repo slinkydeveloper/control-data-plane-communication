@@ -10,10 +10,10 @@ Thanks to this protocol we could:
 
 This protocol guarantees:
 
-* Bi-directional streaming of CloudEvents
+* Bi-directional streaming of commands
 * At least once with acks
 * Automatic reconnection on broken pipes
-* (WIP) AuthN/AuthZ with mutual TLS for controllers deploying the data-plane pods
+* AuthN/AuthZ with mutual TLS for controllers deploying the data-plane pods
 
 This example shows how this protocol is used to mutate the interval used to send events of the sample source. 
 The _netcode_ is available at [`pkg/controlprotocol`](pkg/controlprotocol), 
