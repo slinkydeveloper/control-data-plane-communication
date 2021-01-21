@@ -2,21 +2,52 @@ package controlprotocol
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"io/ioutil"
 	"net"
 	"time"
 
 	"knative.dev/pkg/logging"
 )
 
+const (
+	baseCertsPath = "/etc/secret"
+)
+
 var listenConfig = net.ListenConfig{
 	KeepAlive: 30 * time.Second,
 }
 
-func StartControlServer(ctx context.Context) (Service, error) {
+func LoadTLSConfig() (*tls.Config, error) {
+	dataPlaneCert, err := tls.LoadX509KeyPair(baseCertsPath+"/data_plane_cert.pem", baseCertsPath+"/data_plane_secret.pem")
+	if err != nil {
+		return nil, err
+	}
+
+	caCert, err := ioutil.ReadFile(baseCertsPath + "/ca_cert.pem")
+	if err != nil {
+		return nil, err
+	}
+
+	certPool := x509.NewCertPool()
+	certPool.AppendCertsFromPEM(caCert)
+	conf := &tls.Config{
+		Certificates: []tls.Certificate{dataPlaneCert},
+		ClientCAs:    certPool,
+		ClientAuth:   tls.RequireAndVerifyClientCert,
+		ServerName:   fakeDnsName,
+	}
+
+	return conf, nil
+}
+
+func StartControlServer(ctx context.Context, tlsConf *tls.Config) (Service, error) {
 	ln, err := listenConfig.Listen(ctx, "tcp", ":9000")
 	if err != nil {
 		return nil, err
 	}
+	ln = tls.NewListener(ln, tlsConf)
 
 	tcpConn := newServerTcpConnection(ctx, ln)
 	ctrlService := newService(ctx, tcpConn)

@@ -24,10 +24,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/pointer"
 	"knative.dev/pkg/kmeta"
-	"knative.dev/pkg/system"
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
-	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
 )
 
 // ReceiveAdapterArgs are the arguments needed to create a Sample Source Receive Adapter.
@@ -99,17 +97,20 @@ func MakeReceiveAdapter(args *ReceiveAdapterArgs, secret *corev1.Secret) *v1.Dep
 	}
 }
 
-func MakeSecret(controllerKeyPair *controlprotocol.KeyHolder, dataPlaneKeyPair *controlprotocol.KeyHolder) *corev1.Secret {
+func MakeSecret(src *v1alpha1.SampleSource, caCert, dataPlaneSecret, dataPlaneCert []byte) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
-			Namespace: system.Namespace(),
-			Name:      "sample-source-control",
+			Namespace: src.Namespace,
+			Name:      MakeReceiveAdapterDeploymentName(src),
+			OwnerReferences: []metav1.OwnerReference{
+				*kmeta.NewControllerRef(src),
+			},
 		},
 		Immutable: pointer.BoolPtr(true),
 		Data: map[string][]byte{
-			"controller_public.pem": controllerKeyPair.PublicKeyBytes(),
-			"data_plane_secret.pem": dataPlaneKeyPair.PrivateKeyBytes(),
-			"data_plane_public.pem": dataPlaneKeyPair.PublicKeyBytes(),
+			"ca_cert.pem":           caCert,
+			"data_plane_secret.pem": dataPlaneSecret,
+			"data_plane_cert.pem":   dataPlaneCert,
 		},
 	}
 }

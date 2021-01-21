@@ -52,7 +52,11 @@ type Reconciler struct {
 	sinkResolver   *resolver.URIResolver
 	configAccessor reconcilersource.ConfigAccessor
 
+	certificateManager *controlprotocol.CertificateManager
 	controlConnections *controlprotocol.ControlPlaneConnectionPool
+
+	keyPairs      map[types.NamespacedName]*controlprotocol.KeyPair
+	keyPairsMutex sync.Mutex
 
 	// TODO abstract this
 	lastSentStateIsActive map[string]bool
@@ -73,15 +77,39 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 	ctx = sourcesv1.WithURIResolver(ctx, r.sinkResolver)
 
+	// Generate the key pair, if not existing
+	raNamespacedName := types.NamespacedName{
+		Name:      resources.MakeReceiveAdapterDeploymentName(src),
+		Namespace: src.Namespace,
+	}
+	var dataPlaneKeyPair *controlprotocol.KeyPair
+	if dataPlaneKeyPair, _ = r.getKeyPair(raNamespacedName); dataPlaneKeyPair == nil {
+		var err error
+		dataPlaneKeyPair, err = r.certificateManager.EmitNewDataPlaneCertificate(ctx)
+		if err != nil {
+			return err
+		}
+
+		r.keyPairsMutex.Lock()
+		r.keyPairs[raNamespacedName] = dataPlaneKeyPair
+		r.keyPairsMutex.Unlock()
+	}
+
+	logger.Infof("we have a data plane key pair")
+
 	// -- Reconcile secret
 	secret, event := r.dr.ReconcileSecret(ctx, src, resources.MakeSecret(
-		r.controlConnections.ControllerKeyPair(),
-		r.controlConnections.DataPlaneKeyPair(),
+		src,
+		r.certificateManager.CaCertBytes(),
+		dataPlaneKeyPair.PrivateKeyBytes(),
+		dataPlaneKeyPair.CertBytes(),
 	))
 	if event != nil {
 		logger.Infof("returning because event from ReconcileSecret")
 		return event
 	}
+
+	logger.Infof("we have a secret")
 
 	// -- Create deployment (that's the same as usual, except we don't provide the interval)
 	raArgs := &resources.ReceiveAdapterArgs{
@@ -248,6 +276,13 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSourc
 	r.controlConnections.RemoveConnection(ctx, string(src.UID))
 
 	return nil
+}
+
+func (r *Reconciler) getKeyPair(name types.NamespacedName) (*controlprotocol.KeyPair, bool) {
+	r.keyPairsMutex.Lock()
+	defer r.keyPairsMutex.Unlock()
+	kp, ok := r.keyPairs[name]
+	return kp, ok
 }
 
 func (r *Reconciler) getLastSentInterval(podIp string) (time.Duration, bool) {

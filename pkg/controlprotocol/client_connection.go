@@ -2,6 +2,7 @@ package controlprotocol
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"time"
@@ -9,7 +10,7 @@ import (
 	"knative.dev/pkg/logging"
 )
 
-func StartControlClient(ctx context.Context, dialOptions *net.Dialer, target string) (Service, error) {
+func StartControlClient(ctx context.Context, dialOptions *tls.Dialer, target string) (Service, error) {
 	target = target + ":9000"
 	logging.FromContext(ctx).Infof("Starting control client to %s", target)
 
@@ -19,7 +20,7 @@ func StartControlClient(ctx context.Context, dialOptions *net.Dialer, target str
 		return nil, fmt.Errorf("cannot perform the initial dial to target %s: %w", target, err)
 	}
 
-	tcpConn := newClientTcpConnection(ctx)
+	tcpConn := newClientTcpConnection(ctx, dialOptions)
 	svc := newService(ctx, tcpConn)
 
 	tcpConn.startPolling(conn)
@@ -27,7 +28,7 @@ func StartControlClient(ctx context.Context, dialOptions *net.Dialer, target str
 	return svc, nil
 }
 
-func tryDial(ctx context.Context, dialOptions *net.Dialer, target string, retries int, interval time.Duration) (net.Conn, error) {
+func tryDial(ctx context.Context, dialOptions *tls.Dialer, target string, retries int, interval time.Duration) (net.Conn, error) {
 	var conn net.Conn
 	var err error
 	for i := 0; i < retries; i++ {
@@ -47,9 +48,11 @@ func tryDial(ctx context.Context, dialOptions *net.Dialer, target string, retrie
 
 type clientTcpConnection struct {
 	baseTcpConnection
+
+	dialOptions *tls.Dialer
 }
 
-func newClientTcpConnection(ctx context.Context) *clientTcpConnection {
+func newClientTcpConnection(ctx context.Context, dialOptions *tls.Dialer) *clientTcpConnection {
 	c := &clientTcpConnection{
 		baseTcpConnection: baseTcpConnection{
 			ctx:                    ctx,
@@ -58,6 +61,7 @@ func newClientTcpConnection(ctx context.Context) *clientTcpConnection {
 			inboundMessageChannel:  make(chan *InboundMessage, 10),
 			errors:                 make(chan error, 10),
 		},
+		dialOptions: dialOptions,
 	}
 	return c
 }
@@ -79,7 +83,7 @@ func (t *clientTcpConnection) startPolling(initialConn net.Conn) {
 				t.logger.Warnf("Connection lost, retrying to reconnect %s", initialConn.RemoteAddr().String())
 
 				// Let's try the dial
-				conn, err := tryDial(t.ctx, initialConn.RemoteAddr().String(), clientReconnectionRetry, clientDialRetryInterval)
+				conn, err := tryDial(t.ctx, t.dialOptions, initialConn.RemoteAddr().String(), clientReconnectionRetry, clientDialRetryInterval)
 				if err != nil {
 					t.logger.Warnf("Cannot re-dial to target %s: %v", initialConn.RemoteAddr().String(), err)
 					return

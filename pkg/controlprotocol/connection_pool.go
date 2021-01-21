@@ -3,15 +3,15 @@ package controlprotocol
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"net"
 	"sync"
 	"time"
 )
 
 type ControlPlaneConnectionPool struct {
-	controllerKeyPair *KeyHolder
-	dataPlaneKeyPair  *KeyHolder
-	dialOptions       *net.Dialer
+	certificateManager *CertificateManager
+	baseDialOptions    *net.Dialer
 
 	connsLock sync.Mutex
 	conns     map[string]clientServiceHolder
@@ -23,19 +23,14 @@ type clientServiceHolder struct {
 	cancelFn context.CancelFunc
 }
 
-func NewControlPlaneConnectionPool(controllerKeyPair *KeyHolder, dataPlaneKeyPair *KeyHolder) *ControlPlaneConnectionPool {
-	tlsConfig := tls.Config{}
-
-	dialOptions := &net.Dialer{
-		KeepAlive: keepAlive,
-		Deadline:  time.Time{},
-	}
-
+func NewControlPlaneConnectionPool(certificateManager *CertificateManager) *ControlPlaneConnectionPool {
 	return &ControlPlaneConnectionPool{
-		controllerKeyPair: controllerKeyPair,
-		dataPlaneKeyPair:  dataPlaneKeyPair,
-		conns:             make(map[string]clientServiceHolder),
-		dialOptions:       dialOptions,
+		certificateManager: certificateManager,
+		baseDialOptions: &net.Dialer{
+			KeepAlive: keepAlive,
+			Deadline:  time.Time{},
+		},
+		conns: make(map[string]clientServiceHolder),
 	}
 }
 
@@ -60,9 +55,15 @@ func (cc *ControlPlaneConnectionPool) RemoveConnection(ctx context.Context, key 
 }
 
 func (cc *ControlPlaneConnectionPool) DialControlService(ctx context.Context, key string, host string) (string, Service, error) {
+	// Create TLS dialer
+	tlsDialer, err := createTLSDialer(cc.certificateManager, cc.baseDialOptions)
+	if err != nil {
+		return "", nil, err
+	}
+
 	// Need to start new conn
 	ctx, cancelFn := context.WithCancel(ctx)
-	newSvc, err := StartControlClient(ctx, cc.dialOptions, host)
+	newSvc, err := StartControlClient(ctx, tlsDialer, host)
 	if err != nil {
 		cancelFn()
 		return "", nil, err
@@ -79,10 +80,28 @@ func (cc *ControlPlaneConnectionPool) DialControlService(ctx context.Context, ke
 	return host, newSvc, nil
 }
 
-func (cc *ControlPlaneConnectionPool) DataPlaneKeyPair() *KeyHolder {
-	return cc.dataPlaneKeyPair
-}
+func createTLSDialer(certificateManager *CertificateManager, baseDialOptions *net.Dialer) (*tls.Dialer, error) {
+	caCert := certificateManager.caCert
+	controlPlaneKeyPair := certificateManager.controllerKeyPair
 
-func (cc *ControlPlaneConnectionPool) ControllerKeyPair() *KeyHolder {
-	return cc.controllerKeyPair
+	controlPlaneCert, err := tls.X509KeyPair(controlPlaneKeyPair.CertBytes(), controlPlaneKeyPair.PrivateKeyBytes())
+	if err != nil {
+		return nil, err
+	}
+	certPool := x509.NewCertPool()
+	certPool.AddCert(caCert)
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{controlPlaneCert},
+		RootCAs:      certPool,
+		ServerName:   fakeDnsName,
+	}
+
+	// Copy from base dial options
+	dialOptions := *baseDialOptions
+
+	return &tls.Dialer{
+		NetDialer: &dialOptions,
+		Config:    tlsConfig,
+	}, nil
 }
