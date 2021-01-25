@@ -162,31 +162,25 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		return nil
 	}
 
-	// --- If connection is not established, establish one
-	connectedIp, ctrl := r.controlConnections.ResolveControlInterface(string(src.UID))
-	if ctrl != nil && connectedIp != raPodIp {
-		logger.Infof("Cleaning up old connection: %s", connectedIp)
-
-		// We need to cleanup the old conn
-		r.controlConnections.RemoveConnection(ctx, string(src.UID))
-		connectedIp = ""
-		ctrl = nil
+	// --- Reconcile the connections (in our case, only one connection is there)
+	conns, err := r.controlConnections.ReconcileConnections(
+		ctx,
+		string(src.UID),
+		[]string{raPodIp},
+		func(s string, service controlprotocol.Service) {
+			srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
+			service.InboundMessageHandler(controlprotocol.ControlMessageHandlerFunc(func(ctx context.Context, message controlprotocol.ControlMessage) {
+				message.Ack()
+				r.statusUpdateStore.ControlMessageHandler(ctx, message.Headers().OpCode(), message.Payload(), s, srcNamespacedName)
+			}))
+		},
+		nil, // TODO Should clean up
+	)
+	if err != nil {
+		return fmt.Errorf("cannot reconcile connections: %w", err)
 	}
-	if ctrl == nil {
-		logger.Infof("Creating a new control connection")
-
-		connectedIp, ctrl, err = r.controlConnections.DialControlService(ctx, string(src.UID), raPodIp)
-		if err != nil {
-			return fmt.Errorf("cannot connect to the pod: %w", err)
-		}
-
-		// We need to start the message listener for this control interface
-		srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
-		ctrl.InboundMessageHandler(controlprotocol.ControlMessageHandlerFunc(func(ctx context.Context, message controlprotocol.ControlMessage) {
-			message.Ack()
-			r.statusUpdateStore.ControlMessageHandler(ctx, message.Headers().OpCode(), message.Payload(), connectedIp, srcNamespacedName)
-		}))
-	}
+	connectedIp := raPodIp
+	ctrl := conns[connectedIp]
 
 	logger.Infof("we have a control connection to %s", connectedIp)
 
@@ -273,7 +267,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSource) pkgreconciler.Event {
 	// Check if there is an old ip, so we can cleanup that conn
-	r.controlConnections.RemoveConnection(ctx, string(src.UID))
+	r.controlConnections.RemoveAllConnections(ctx, string(src.UID))
 
 	return nil
 }
