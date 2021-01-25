@@ -23,6 +23,10 @@ type clientServiceHolder struct {
 	cancelFn context.CancelFunc
 }
 
+func NewInsecureControlPlaneConnectionPool() *ControlPlaneConnectionPool {
+	return NewControlPlaneConnectionPool(nil)
+}
+
 func NewControlPlaneConnectionPool(certificateManager *CertificateManager) *ControlPlaneConnectionPool {
 	return &ControlPlaneConnectionPool{
 		certificateManager: certificateManager,
@@ -55,15 +59,21 @@ func (cc *ControlPlaneConnectionPool) RemoveConnection(ctx context.Context, key 
 }
 
 func (cc *ControlPlaneConnectionPool) DialControlService(ctx context.Context, key string, host string) (string, Service, error) {
-	// Create TLS dialer
-	tlsDialer, err := createTLSDialer(cc.certificateManager, cc.baseDialOptions)
-	if err != nil {
-		return "", nil, err
+	var dialer Dialer
+	dialer = cc.baseDialOptions
+	// Check if certificateManager is set up, otherwise connect without tls
+	if cc.certificateManager != nil {
+		// Create TLS dialer
+		var err error
+		dialer, err = createTLSDialer(cc.certificateManager, cc.baseDialOptions)
+		if err != nil {
+			return "", nil, err
+		}
 	}
 
 	// Need to start new conn
 	ctx, cancelFn := context.WithCancel(ctx)
-	newSvc, err := StartControlClient(ctx, tlsDialer, host)
+	newSvc, err := StartControlClient(ctx, dialer, host)
 	if err != nil {
 		cancelFn()
 		return "", nil, err

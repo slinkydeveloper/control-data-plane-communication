@@ -52,6 +52,7 @@ func NewController(
 	deploymentInformer := deploymentinformer.Get(ctx)
 	sampleSourceInformer := samplesourceinformer.Get(ctx)
 
+	// TODO We need an initial setup here that persists somewhere (maybe in a secret?) the cert manager.
 	certManager, err := controlprotocol.NewCertificateManager(ctx)
 	if err != nil {
 		logging.FromContext(ctx).Panicf("cannot create the cert manager: %v", err)

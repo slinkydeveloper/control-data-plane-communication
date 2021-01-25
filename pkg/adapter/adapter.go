@@ -136,7 +136,7 @@ func (a *Adapter) Start(ctx context.Context) error {
 		logging.FromContext(ctx).Warnf("Cannot load the TLS config: %v", err)
 		return err
 	}
-	a.controlServer, err = controlprotocol.StartControlServer(ctx, tlsConf)
+	a.controlServer, _, err = controlprotocol.StartControlServer(ctx, tlsConf)
 	if err != nil {
 		return err
 	}

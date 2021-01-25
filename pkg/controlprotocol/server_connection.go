@@ -42,21 +42,29 @@ func LoadTLSConfig() (*tls.Config, error) {
 	return conf, nil
 }
 
-func StartControlServer(ctx context.Context, tlsConf *tls.Config) (Service, error) {
+func StartInsecureControlServer(ctx context.Context) (Service, <-chan struct{}, error) {
+	return StartControlServer(ctx, nil)
+}
+
+func StartControlServer(ctx context.Context, tlsConf *tls.Config) (Service, <-chan struct{}, error) {
 	ln, err := listenConfig.Listen(ctx, "tcp", ":9000")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	ln = tls.NewListener(ln, tlsConf)
+	if tlsConf != nil {
+		ln = tls.NewListener(ln, tlsConf)
+	}
 
 	tcpConn := newServerTcpConnection(ctx, ln)
 	ctrlService := newService(ctx, tcpConn)
 
 	logging.FromContext(ctx).Infof("Started listener: %s", ln.Addr().String())
 
-	tcpConn.startAcceptPolling()
+	closedServerCh := make(chan struct{})
 
-	return ctrlService, nil
+	tcpConn.startAcceptPolling(closedServerCh)
+
+	return ctrlService, closedServerCh, nil
 }
 
 type serverTcpConnection struct {
@@ -79,7 +87,7 @@ func newServerTcpConnection(ctx context.Context, listener net.Listener) *serverT
 	return c
 }
 
-func (t *serverTcpConnection) startAcceptPolling() {
+func (t *serverTcpConnection) startAcceptPolling(closedServerChannel chan struct{}) {
 	// We have 2 goroutines:
 	// * One polls the listener to accept new conns
 	// * One blocks on context done and closes the listener and the connection
@@ -106,8 +114,12 @@ func (t *serverTcpConnection) startAcceptPolling() {
 		err := t.listener.Close()
 		t.logger.Infof("Listener closed")
 		if err != nil {
-			t.logger.Warnf("Error while closing the server: %s", err)
+			t.logger.Warnf("Error while closing the listener: %s", err)
 		}
 		err = t.close()
+		if err != nil {
+			t.logger.Warnf("Error while closing the tcp connection: %s", err)
+		}
+		close(closedServerChannel)
 	}()
 }
