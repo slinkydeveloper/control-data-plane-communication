@@ -162,8 +162,6 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		return nil
 	}
 
-	// TODO lionel add your fancy MT scheduler here!
-
 	// --- If connection is not established, establish one
 	connectedIp, ctrl := r.controlConnections.ResolveControlInterface(string(src.UID))
 	if ctrl != nil && connectedIp != raPodIp {
@@ -191,6 +189,8 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	}
 
 	logger.Infof("we have a control connection to %s", connectedIp)
+
+	// TODO lionel add your fancy MT scheduler here!
 
 	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
