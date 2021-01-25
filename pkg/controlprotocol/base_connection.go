@@ -24,7 +24,8 @@ type baseTcpConnection struct {
 	ctx    context.Context
 	logger *zap.SugaredLogger
 
-	conn net.Conn
+	conn      net.Conn
+	connMutex sync.RWMutex
 
 	outboundMessageChannel chan *OutboundMessage
 	inboundMessageChannel  chan *InboundMessage
@@ -45,7 +46,9 @@ func (t *baseTcpConnection) Errors() <-chan error {
 
 func (t *baseTcpConnection) read() error {
 	msg := &InboundMessage{}
+	t.connMutex.RLock()
 	n, err := msg.ReadFrom(t.conn)
+	t.connMutex.RUnlock()
 	if err != nil {
 		return err
 	}
@@ -58,7 +61,9 @@ func (t *baseTcpConnection) read() error {
 }
 
 func (t *baseTcpConnection) write(msg *OutboundMessage) error {
+	t.connMutex.RLock()
 	n, err := msg.WriteTo(t.conn)
+	t.connMutex.RUnlock()
 	if err != nil {
 		return err
 	}
@@ -70,7 +75,9 @@ func (t *baseTcpConnection) write(msg *OutboundMessage) error {
 
 func (t *baseTcpConnection) consumeConnection(conn net.Conn) {
 	t.logger.Infof("Setting new conn: %s", conn.RemoteAddr())
+	t.connMutex.Lock()
 	t.conn = conn
+	t.connMutex.Unlock()
 
 	closedConnCtx, closedConnCancel := context.WithCancel(t.ctx)
 
@@ -138,16 +145,20 @@ func (t *baseTcpConnection) consumeConnection(conn net.Conn) {
 	wg.Wait()
 
 	t.logger.Debugf("Stopped consuming connection with local %s and remote %s", conn.LocalAddr().String(), conn.RemoteAddr().String())
+	t.connMutex.RLock()
 	err := t.conn.Close()
+	t.connMutex.RUnlock()
 	if err != nil && !isDisconnection(err) {
 		t.logger.Warnf("Error while closing the previous connection: %s", err)
 	}
 }
 
 func (t *baseTcpConnection) close() (err error) {
+	t.connMutex.RLock()
 	if t.conn != nil {
 		err = t.conn.Close()
 	}
+	t.connMutex.RUnlock()
 	close(t.inboundMessageChannel)
 	close(t.outboundMessageChannel)
 	close(t.errors)

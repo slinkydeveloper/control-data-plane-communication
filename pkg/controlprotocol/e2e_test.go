@@ -208,7 +208,7 @@ func TestManyMessages(t *testing.T) {
 	ctx, server, _, client := mustSetupWithTLS(t)
 
 	var wg sync.WaitGroup
-	wg.Add(1000)
+	wg.Add(1000 * 2)
 
 	server.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
@@ -238,10 +238,12 @@ func TestManyMessages(t *testing.T) {
 		if i%2 == 0 {
 			go func() {
 				require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+				wg.Done()
 			}()
 		} else {
 			go func() {
 				require.NoError(t, client.SendBinaryAndWaitForAck(2, []byte("Funky2!")))
+				wg.Done()
 			}()
 		}
 	}
