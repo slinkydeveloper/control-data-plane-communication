@@ -20,6 +20,7 @@ import (
 	"context"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
 	reconcilersource "knative.dev/eventing/pkg/reconciler/source"
 
 	"github.com/kelseyhightower/envconfig"
@@ -51,12 +52,20 @@ func NewController(
 	deploymentInformer := deploymentinformer.Get(ctx)
 	sampleSourceInformer := samplesourceinformer.Get(ctx)
 
+	// TODO We need an initial setup here that persists somewhere (maybe in a secret?) the cert manager.
+	certManager, err := controlprotocol.NewCertificateManager(ctx)
+	if err != nil {
+		logging.FromContext(ctx).Panicf("cannot create the cert manager: %v", err)
+	}
+
 	r := &Reconciler{
 		dr: &reconciler.DeploymentReconciler{KubeClientSet: kubeclient.Get(ctx)},
 		// Config accessor takes care of tracing/config/logging config propagation to the receive adapter
 		configAccessor:     reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
-		controlConnections: controlprotocol.NewControlPlaneConnectionPool("samplesource-controller"),
+		certificateManager: certManager,
+		controlConnections: controlprotocol.NewControlPlaneConnectionPool(certManager),
 
+		keyPairs:               make(map[types.NamespacedName]*controlprotocol.KeyPair),
 		lastIntervalUpdateSent: make(map[string]time.Duration),
 		lastSentStateIsActive:  make(map[string]bool),
 	}

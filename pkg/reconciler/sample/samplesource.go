@@ -52,7 +52,11 @@ type Reconciler struct {
 	sinkResolver   *resolver.URIResolver
 	configAccessor reconcilersource.ConfigAccessor
 
+	certificateManager *controlprotocol.CertificateManager
 	controlConnections *controlprotocol.ControlPlaneConnectionPool
+
+	keyPairs      map[types.NamespacedName]*controlprotocol.KeyPair
+	keyPairsMutex sync.Mutex
 
 	// TODO abstract this
 	lastSentStateIsActive map[string]bool
@@ -73,18 +77,49 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 	ctx = sourcesv1.WithURIResolver(ctx, r.sinkResolver)
 
-	// TODO generate mTLS stuff here
+	// Generate the key pair, if not existing
+	raNamespacedName := types.NamespacedName{
+		Name:      resources.MakeReceiveAdapterDeploymentName(src),
+		Namespace: src.Namespace,
+	}
+	var dataPlaneKeyPair *controlprotocol.KeyPair
+	if dataPlaneKeyPair, _ = r.getKeyPair(raNamespacedName); dataPlaneKeyPair == nil {
+		var err error
+		dataPlaneKeyPair, err = r.certificateManager.EmitNewDataPlaneCertificate(ctx)
+		if err != nil {
+			return err
+		}
+
+		r.keyPairsMutex.Lock()
+		r.keyPairs[raNamespacedName] = dataPlaneKeyPair
+		r.keyPairsMutex.Unlock()
+	}
+
+	logger.Infof("we have a data plane key pair")
+
+	// -- Reconcile secret
+	secret, event := r.dr.ReconcileSecret(ctx, src, resources.MakeSecret(
+		src,
+		r.certificateManager.CaCertBytes(),
+		dataPlaneKeyPair.PrivateKeyBytes(),
+		dataPlaneKeyPair.CertBytes(),
+	))
+	if event != nil {
+		logger.Infof("returning because event from ReconcileSecret")
+		return event
+	}
+
+	logger.Infof("we have a secret")
 
 	// -- Create deployment (that's the same as usual, except we don't provide the interval)
-	ra, sb, event := r.dr.ReconcileDeployment(ctx, src, makeSinkBinding(src),
-		resources.MakeReceiveAdapter(&resources.ReceiveAdapterArgs{
-			EventSource:    src.Namespace + "/" + src.Name,
-			Image:          r.ReceiveAdapterImage,
-			Source:         src,
-			Labels:         resources.Labels(src.Name),
-			AdditionalEnvs: r.configAccessor.ToEnvVars(), // Grab config envs for tracing/logging/metrics
-		}),
-	)
+	raArgs := &resources.ReceiveAdapterArgs{
+		EventSource:    src.Namespace + "/" + src.Name,
+		Image:          r.ReceiveAdapterImage,
+		Source:         src,
+		Labels:         resources.Labels(src.Name),
+		AdditionalEnvs: r.configAccessor.ToEnvVars(), // Grab config envs for tracing/logging/metrics
+	}
+	ra, sb, event := r.dr.ReconcileDeployment(ctx, src, makeSinkBinding(src), resources.MakeReceiveAdapter(raArgs, secret))
 	if ra != nil {
 		src.Status.PropagateDeploymentAvailability(ra)
 	}
@@ -110,8 +145,6 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		return fmt.Errorf("error getting receive adapter pods %q: %v", ra.Name, err)
 	}
 
-	// TODO configure the connection with the mTLS stuff, if not set
-
 	if len(pods.Items) == 0 {
 		logger.Infof("returning because there is still no pod up for the deployment '%s'", ra.Name)
 		return nil
@@ -128,8 +161,6 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		logger.Infof("returning because there is still no pod ip for the deployment '%s'", ra.Name)
 		return nil
 	}
-
-	// TODO lionel add your fancy MT scheduler here!
 
 	// --- If connection is not established, establish one
 	connectedIp, ctrl := r.controlConnections.ResolveControlInterface(string(src.UID))
@@ -158,6 +189,8 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	}
 
 	logger.Infof("we have a control connection to %s", connectedIp)
+
+	// TODO lionel add your fancy MT scheduler here!
 
 	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
@@ -243,6 +276,13 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSourc
 	r.controlConnections.RemoveConnection(ctx, string(src.UID))
 
 	return nil
+}
+
+func (r *Reconciler) getKeyPair(name types.NamespacedName) (*controlprotocol.KeyPair, bool) {
+	r.keyPairsMutex.Lock()
+	defer r.keyPairsMutex.Unlock()
+	kp, ok := r.keyPairs[name]
+	return kp, ok
 }
 
 func (r *Reconciler) getLastSentInterval(podIp string) (time.Duration, bool) {

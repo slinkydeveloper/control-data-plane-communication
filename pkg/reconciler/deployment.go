@@ -25,6 +25,24 @@ import (
 	"go.uber.org/zap"
 )
 
+// newSecretCreated makes a new reconciler event with event type Normal, and
+// reason SecretCreated.
+func newSecretCreated(namespace, name string) pkgreconciler.Event {
+	return pkgreconciler.NewEvent(corev1.EventTypeNormal, "SecretCreated", "created secret: \"%s/%s\"", namespace, name)
+}
+
+// newSecretFailed makes a new reconciler event with event type Warning, and
+// reason SecretFailed.
+func newSecretFailed(namespace, name string, err error) pkgreconciler.Event {
+	return pkgreconciler.NewEvent(corev1.EventTypeWarning, "SecretFailed", "failed to create secret: \"%s/%s\", %w", namespace, name, err)
+}
+
+// newSecretUpdated makes a new reconciler event with event type Normal, and
+// reason SecretUpdated.
+func newSecretUpdated(namespace, name string) pkgreconciler.Event {
+	return pkgreconciler.NewEvent(corev1.EventTypeNormal, "SecretUpdated", "updated secret: \"%s/%s\"", namespace, name)
+}
+
 // newDeploymentCreated makes a new reconciler event with event type Normal, and
 // reason DeploymentCreated.
 func newDeploymentCreated(namespace, name string) pkgreconciler.Event {
@@ -45,6 +63,37 @@ func newDeploymentUpdated(namespace, name string) pkgreconciler.Event {
 
 type DeploymentReconciler struct {
 	KubeClientSet kubernetes.Interface
+}
+
+// ReconcileSecret reconciles deployment resource for SampleSource
+func (r *DeploymentReconciler) ReconcileSecret(
+	ctx context.Context,
+	owner kmeta.OwnerRefable,
+	expected *corev1.Secret,
+) (*corev1.Secret, pkgreconciler.Event) {
+	namespace := owner.GetObjectMeta().GetNamespace()
+	secret, err := r.KubeClientSet.CoreV1().Secrets(namespace).Get(ctx, expected.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		secret, err = r.KubeClientSet.CoreV1().Secrets(namespace).Create(ctx, expected, metav1.CreateOptions{})
+		if err != nil {
+			return nil, newSecretFailed(expected.Namespace, expected.Name, err)
+		}
+		return secret, newSecretCreated(secret.Namespace, secret.Name)
+	} else if err != nil {
+		return nil, fmt.Errorf("error getting secret %q: %v", expected.Name, err)
+	} else if !metav1.IsControlledBy(secret, owner.GetObjectMeta()) {
+		return nil, fmt.Errorf("secret %q is not owned by %s %q",
+			secret.Name, owner.GetGroupVersionKind().Kind, owner.GetObjectMeta().GetName())
+	} else if !equality.Semantic.DeepEqual(expected.Data, secret.Data) {
+		secret.Data = expected.Data
+		if secret, err = r.KubeClientSet.CoreV1().Secrets(namespace).Update(ctx, expected, metav1.UpdateOptions{}); err != nil {
+			return secret, err
+		}
+		return secret, newSecretUpdated(secret.Namespace, secret.Name)
+	} else {
+		logging.FromContext(ctx).Debugw("Reusing existing secret", zap.Any("secret", secret))
+	}
+	return secret, nil
 }
 
 // ReconcileDeployment reconciles deployment resource for SampleSource

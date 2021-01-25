@@ -129,11 +129,16 @@ func (a *Adapter) HandleControlMessage(ctx context.Context, msg controlprotocol.
 
 // Start runs the adapter.
 // Returns if ctx is cancelled or Send() returns an error.
-func (a *Adapter) Start(ctx context.Context) (err error) {
+func (a *Adapter) Start(ctx context.Context) error {
 	// Start control server
-	a.controlServer, err = controlprotocol.StartControlServer(ctx)
+	tlsConf, err := controlprotocol.LoadTLSConfig()
 	if err != nil {
-		return
+		logging.FromContext(ctx).Warnf("Cannot load the TLS config: %v", err)
+		return err
+	}
+	a.controlServer, _, err = controlprotocol.StartControlServer(ctx, tlsConf)
+	if err != nil {
+		return err
 	}
 	a.logger.Info("Control server started")
 	a.logger.Infof("Waiting for the first interval to set")
@@ -141,7 +146,7 @@ func (a *Adapter) Start(ctx context.Context) (err error) {
 	a.controlServer.InboundMessageHandler(a)
 
 	<-ctx.Done()
-	return
+	return nil
 }
 
 func (a *Adapter) startPingGoroutine(adapterCtx context.Context) context.CancelFunc {
