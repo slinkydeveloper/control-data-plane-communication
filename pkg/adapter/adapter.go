@@ -26,8 +26,8 @@ import (
 	"knative.dev/eventing/pkg/adapter/v2"
 	"knative.dev/pkg/logging"
 
-	"knative.dev/control-data-plane-communication/pkg/control"
-	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
+	"knative.dev/control-data-plane-communication/pkg/control/message"
+	"knative.dev/control-data-plane-communication/pkg/control/protocol"
 )
 
 type envConfig struct {
@@ -54,7 +54,7 @@ type Adapter struct {
 
 	nextID int
 
-	controlServer controlprotocol.Service
+	controlServer protocol.Service
 
 	stateMutex       sync.Mutex
 	state            State
@@ -81,14 +81,14 @@ func (a *Adapter) newEvent() cloudevents.Event {
 	return event
 }
 
-func (a *Adapter) HandleControlMessage(ctx context.Context, msg controlprotocol.ControlMessage) {
+func (a *Adapter) HandleControlMessage(ctx context.Context, msg protocol.ControlMessage) {
 	a.logger.Debugf("Received control message")
 
 	msg.Ack()
 
 	switch msg.Headers().OpCode() {
-	case control.UpdateIntervalOpCode:
-		var interval control.Duration
+	case message.UpdateIntervalOpCode:
+		var interval message.Duration
 		err := interval.UnmarshalBinary(msg.Payload())
 		if err != nil {
 			a.logger.Errorf("Cannot parse the new interval. This should not happen, some controller bug?: %v", err)
@@ -99,18 +99,18 @@ func (a *Adapter) HandleControlMessage(ctx context.Context, msg controlprotocol.
 		a.logger.Infof("Interval set %v", a.interval)
 		a.intervalMutex.Unlock()
 
-		err = a.controlServer.SendAndWaitForAck(control.StatusUpdateOpCode, interval)
+		err = a.controlServer.SendAndWaitForAck(message.StatusUpdateOpCode, interval)
 		if err != nil {
 			a.logger.Errorf("Something is broken in the update event: %v", err)
 		}
-	case control.StopOpCode:
+	case message.StopOpCode:
 		a.logger.Debugf("Received stop signal")
 		a.stateMutex.Lock()
 		if a.state == Running {
 			a.closeRunningPing()
 		}
 		a.stateMutex.Unlock()
-	case control.ResumeOpCode:
+	case message.ResumeOpCode:
 		a.logger.Debugf("Received resume signal")
 		a.stateMutex.Lock()
 		if a.state == Stopped {
@@ -131,12 +131,12 @@ func (a *Adapter) HandleControlMessage(ctx context.Context, msg controlprotocol.
 // Returns if ctx is cancelled or Send() returns an error.
 func (a *Adapter) Start(ctx context.Context) error {
 	// Start control server
-	tlsConf, err := controlprotocol.LoadTLSConfig()
+	tlsConf, err := protocol.LoadTLSConfig()
 	if err != nil {
 		logging.FromContext(ctx).Warnf("Cannot load the TLS config: %v", err)
 		return err
 	}
-	a.controlServer, _, err = controlprotocol.StartControlServer(ctx, tlsConf)
+	a.controlServer, _, err = protocol.StartControlServer(ctx, tlsConf)
 	if err != nil {
 		return err
 	}
@@ -153,7 +153,7 @@ func (a *Adapter) startPingGoroutine(adapterCtx context.Context) context.CancelF
 	loopCtx, cancelFn := context.WithCancel(context.TODO())
 
 	a.logger.Info("Starting the ping goroutine")
-	err := a.controlServer.SendSignalAndWaitForAck(control.ResumedOpCode)
+	err := a.controlServer.SendSignalAndWaitForAck(message.ResumedOpCode)
 	if err != nil {
 		a.logger.Warnf("Cannot send the resumed signal! %v", err)
 	}
@@ -180,7 +180,7 @@ func (a *Adapter) startPingGoroutine(adapterCtx context.Context) context.CancelF
 				return
 			case <-loopCtx.Done():
 				a.logger.Info("Requested a shut down of the ping goroutine")
-				err = a.controlServer.SendSignalAndWaitForAck(control.StoppedOpCode)
+				err = a.controlServer.SendSignalAndWaitForAck(message.StoppedOpCode)
 				if err != nil {
 					a.logger.Warnf("Cannot send the stopped signal! %v", err)
 				}

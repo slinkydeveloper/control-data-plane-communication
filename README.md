@@ -16,7 +16,7 @@ This protocol guarantees:
 * AuthN/AuthZ with mutual TLS for controllers deploying the data-plane pods
 
 This example shows how this protocol is used to mutate the interval used to send events of the sample source. 
-The _netcode_ is available at [`pkg/controlprotocol`](pkg/controlprotocol), 
+The _netcode_ is available at [`pkg/controlprotocol`](pkg/control/protocol), 
 the RA code is available at [`pkg/adapter/adapter.go`](pkg/adapter/adapter.go) and 
 the controller code to trigger the interval update is available in the function [`UpdateInterval`](pkg/reconciler/sample/samplesource.go).
 

@@ -1,4 +1,4 @@
-package controlprotocol
+package protocol
 
 import (
 	"context"
@@ -27,12 +27,12 @@ func TestStartClientAndServer(t *testing.T) {
 
 func TestServerToClient(t *testing.T) {
 	_, server, _, client := mustSetupWithTLS(t)
-	sendReceiveTest(t, server, client)
+	runSendReceiveTest(t, server, client)
 }
 
 func TestClientToServer(t *testing.T) {
 	_, server, _, client := mustSetupWithTLS(t)
-	sendReceiveTest(t, client, server)
+	runSendReceiveTest(t, client, server)
 }
 
 func TestNoopMessageHandlerAcks(t *testing.T) {
@@ -42,12 +42,12 @@ func TestNoopMessageHandlerAcks(t *testing.T) {
 
 func TestInsecureServerToClient(t *testing.T) {
 	_, server, _, client := mustSetupInsecure(t)
-	sendReceiveTest(t, server, client)
+	runSendReceiveTest(t, server, client)
 }
 
 func TestInsecureClientToServer(t *testing.T) {
 	_, server, _, client := mustSetupInsecure(t)
-	sendReceiveTest(t, client, server)
+	runSendReceiveTest(t, client, server)
 }
 
 func TestServerToClientAndBack(t *testing.T) {
@@ -271,7 +271,7 @@ func mustGenerateTLSServerConf(t *testing.T, certManager *CertificateManager) *t
 		Certificates: []tls.Certificate{dataPlaneCert},
 		ClientCAs:    certPool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ServerName:   fakeDnsName,
+		ServerName:   certManager.CaCert().DNSNames[0],
 	}
 }
 
@@ -281,7 +281,7 @@ func testTLSConf(t *testing.T, ctx context.Context) (*tls.Config, *tls.Dialer) {
 
 	serverTLSConf := mustGenerateTLSServerConf(t, cm)
 
-	tlsDialer, err := createTLSDialer(cm, &net.Dialer{
+	tlsDialer, err := cm.GenerateTLSDialer(&net.Dialer{
 		KeepAlive: keepAlive,
 		Deadline:  time.Time{},
 	})
@@ -335,7 +335,7 @@ func mustSetupInsecure(t *testing.T) (serverCtx context.Context, server Service,
 	return serverCtx, server, clientCtx, client
 }
 
-func sendReceiveTest(t *testing.T, sender Service, receiver Service) {
+func runSendReceiveTest(t *testing.T, sender Service, receiver Service) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 

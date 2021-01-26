@@ -27,7 +27,8 @@ import (
 	"k8s.io/client-go/tools/cache"
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
-	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
+	"knative.dev/control-data-plane-communication/pkg/control/protocol"
+	ctrlreconciler "knative.dev/control-data-plane-communication/pkg/control/reconciler"
 
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
@@ -53,7 +54,7 @@ func NewController(
 	sampleSourceInformer := samplesourceinformer.Get(ctx)
 
 	// TODO We need an initial setup here that persists somewhere (maybe in a secret?) the cert manager.
-	certManager, err := controlprotocol.NewCertificateManager(ctx)
+	certManager, err := protocol.NewCertificateManager(ctx)
 	if err != nil {
 		logging.FromContext(ctx).Panicf("cannot create the cert manager: %v", err)
 	}
@@ -63,9 +64,9 @@ func NewController(
 		// Config accessor takes care of tracing/config/logging config propagation to the receive adapter
 		configAccessor:     reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
 		certificateManager: certManager,
-		controlConnections: controlprotocol.NewControlPlaneConnectionPool(certManager),
+		controlConnections: ctrlreconciler.NewControlPlaneConnectionPool(certManager),
 
-		keyPairs:               make(map[types.NamespacedName]*controlprotocol.KeyPair),
+		keyPairs:               make(map[types.NamespacedName]*protocol.KeyPair),
 		lastIntervalUpdateSent: make(map[string]time.Duration),
 		lastSentStateIsActive:  make(map[string]bool),
 	}

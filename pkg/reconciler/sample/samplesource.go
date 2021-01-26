@@ -38,8 +38,9 @@ import (
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
-	"knative.dev/control-data-plane-communication/pkg/control"
-	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
+	"knative.dev/control-data-plane-communication/pkg/control/message"
+	"knative.dev/control-data-plane-communication/pkg/control/protocol"
+	ctrlreconciler "knative.dev/control-data-plane-communication/pkg/control/reconciler"
 	"knative.dev/control-data-plane-communication/pkg/reconciler"
 	"knative.dev/control-data-plane-communication/pkg/reconciler/sample/resources"
 )
@@ -52,10 +53,10 @@ type Reconciler struct {
 	sinkResolver   *resolver.URIResolver
 	configAccessor reconcilersource.ConfigAccessor
 
-	certificateManager *controlprotocol.CertificateManager
-	controlConnections *controlprotocol.ControlPlaneConnectionPool
+	certificateManager *protocol.CertificateManager
+	controlConnections *ctrlreconciler.ControlPlaneConnectionPool
 
-	keyPairs      map[types.NamespacedName]*controlprotocol.KeyPair
+	keyPairs      map[types.NamespacedName]*protocol.KeyPair
 	keyPairsMutex sync.Mutex
 
 	// TODO abstract this
@@ -82,7 +83,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		Name:      resources.MakeReceiveAdapterDeploymentName(src),
 		Namespace: src.Namespace,
 	}
-	var dataPlaneKeyPair *controlprotocol.KeyPair
+	var dataPlaneKeyPair *protocol.KeyPair
 	if dataPlaneKeyPair, _ = r.getKeyPair(raNamespacedName); dataPlaneKeyPair == nil {
 		var err error
 		dataPlaneKeyPair, err = r.certificateManager.EmitNewDataPlaneCertificate(ctx)
@@ -167,9 +168,9 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		ctx,
 		string(src.UID),
 		[]string{raPodIp},
-		func(s string, service controlprotocol.Service) {
+		func(s string, service protocol.Service) {
 			srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
-			service.InboundMessageHandler(controlprotocol.ControlMessageHandlerFunc(func(ctx context.Context, message controlprotocol.ControlMessage) {
+			service.InboundMessageHandler(protocol.ControlMessageHandlerFunc(func(ctx context.Context, message protocol.ControlMessage) {
 				message.Ack()
 				r.statusUpdateStore.ControlMessageHandler(ctx, message.Headers().OpCode(), message.Payload(), s, srcNamespacedName)
 			}))
@@ -189,7 +190,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
 	if old, ok := r.getLastSentInterval(connectedIp); !ok || old != actualInterval {
-		err := ctrl.SendAndWaitForAck(control.UpdateIntervalOpCode, control.Duration(actualInterval))
+		err := ctrl.SendAndWaitForAck(message.UpdateIntervalOpCode, message.Duration(actualInterval))
 		if err != nil {
 			return fmt.Errorf("cannot send the event to the pod: %w", err)
 		}
@@ -221,7 +222,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 		// Reconcile active
 		if sentResumeSignal, ok := r.getLastSentSignal(connectedIp); !ok || !sentResumeSignal {
-			err := ctrl.SendSignalAndWaitForAck(control.ResumeOpCode)
+			err := ctrl.SendSignalAndWaitForAck(message.ResumeOpCode)
 			if err != nil {
 				return fmt.Errorf("cannot send the event to the pod: %w", err)
 			}
@@ -243,7 +244,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 		// Reconcile stop
 		if sentResumeSignal, ok := r.getLastSentSignal(connectedIp); !ok || sentResumeSignal {
-			err := ctrl.SendSignalAndWaitForAck(control.StopOpCode)
+			err := ctrl.SendSignalAndWaitForAck(message.StopOpCode)
 			if err != nil {
 				return fmt.Errorf("cannot send the event to the pod: %w", err)
 			}
@@ -272,7 +273,7 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSourc
 	return nil
 }
 
-func (r *Reconciler) getKeyPair(name types.NamespacedName) (*controlprotocol.KeyPair, bool) {
+func (r *Reconciler) getKeyPair(name types.NamespacedName) (*protocol.KeyPair, bool) {
 	r.keyPairsMutex.Lock()
 	defer r.keyPairsMutex.Unlock()
 	kp, ok := r.keyPairs[name]
