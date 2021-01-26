@@ -52,6 +52,9 @@ var serverConnectionPoolSetupTestCases = map[string]func(t *testing.T, ctx conte
 		})
 
 		connectionPool := NewControlPlaneConnectionPool(certManager, opts...)
+		t.Cleanup(func() {
+			connectionPool.Close(ctx)
+		})
 
 		return server, connectionPool
 	},
@@ -112,13 +115,6 @@ func TestCachingWrapper(t *testing.T) {
 
 			messageReceivedCounter := atomic.NewInt32(0)
 
-			dataPlane.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-				require.NoError(t, err)
-			}))
-			controlPlane.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-				require.NoError(t, err)
-			}))
-
 			dataPlane.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 				require.Equal(t, uint8(1), message.Headers().OpCode())
 				require.Equal(t, "Funky!", string(message.Payload()))
@@ -156,13 +152,6 @@ func runSendReceiveTest(t *testing.T, sender service.Service, receiver service.S
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
-	receiver.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
-	sender.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
-
 	receiver.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
@@ -186,6 +175,9 @@ func setupInsecureServerAndConnectionPool(t *testing.T, ctx context.Context, opt
 	})
 
 	connectionPool := NewInsecureControlPlaneConnectionPool(opts...)
+	t.Cleanup(func() {
+		connectionPool.Close(ctx)
+	})
 
 	return server, connectionPool
 }

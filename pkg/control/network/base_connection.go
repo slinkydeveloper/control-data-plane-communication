@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"sync"
 
 	"go.uber.org/zap"
@@ -138,7 +139,7 @@ func (t *baseTcpConnection) consumeConnection(conn net.Conn) {
 	t.connMutex.RLock()
 	err := t.conn.Close()
 	t.connMutex.RUnlock()
-	if err != nil && !isEOF(err) {
+	if err != nil && !isEOF(err) && !isUseOfClosedConnection(err) {
 		t.logger.Warnf("Error while closing the previous connection: %s", err)
 	}
 }
@@ -170,6 +171,9 @@ func (t *baseTcpConnection) close() (err error) {
 	close(t.inboundMessageChannel)
 	close(t.outboundMessageChannel)
 	close(t.errors)
+	if err == nil || isEOF(err) || isUseOfClosedConnection(err) {
+		return nil
+	}
 	return err
 }
 
@@ -185,4 +189,11 @@ func isTransientError(err error) bool {
 
 func isEOF(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+var isUseOfClosedConnectionRegex = regexp.MustCompile("use of closed.* connection")
+
+func isUseOfClosedConnection(err error) bool {
+	// Don't rely on this check, it's just used to reduce logging noise, it shouldn't be used as assertion
+	return isUseOfClosedConnectionRegex.MatchString(err.Error())
 }

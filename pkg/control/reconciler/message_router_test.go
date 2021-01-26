@@ -18,9 +18,12 @@ func setupConnection(t *testing.T) (service.Service, service.Service) {
 
 	dataPlane, connectionPool := setupInsecureServerAndConnectionPool(t, ctx)
 
-	conns, err := connectionPool.ReconcileConnections(context.TODO(), "hello", []string{"127.0.0.1"}, nil, nil)
+	clientCtx, clientCancelFn := context.WithCancel(ctx)
+
+	conns, err := connectionPool.ReconcileConnections(clientCtx, "hello", []string{"127.0.0.1"}, nil, nil)
 	require.NoError(t, err)
 	require.Contains(t, conns, "127.0.0.1")
+	t.Cleanup(clientCancelFn)
 
 	controlPlane := conns["127.0.0.1"]
 

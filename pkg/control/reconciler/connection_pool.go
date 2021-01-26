@@ -126,6 +126,18 @@ func (cc *ControlPlaneConnectionPool) RemoveAllConnections(ctx context.Context, 
 	delete(cc.conns, key)
 }
 
+func (cc *ControlPlaneConnectionPool) Close(ctx context.Context) {
+	cc.connsLock.Lock()
+	defer cc.connsLock.Unlock()
+	for _, m := range cc.conns {
+		for _, holder := range m {
+			holder.cancelFn()
+		}
+	}
+	// Let's make sure this object is reusable
+	cc.conns = make(map[string]map[string]clientServiceHolder)
+}
+
 func (cc *ControlPlaneConnectionPool) ReconcileConnections(ctx context.Context, key string, wantConnections []string, newServiceCb func(string, ctrlservice.Service), oldServiceCb func(string)) (map[string]ctrlservice.Service, error) {
 	existingConnections := cc.GetConnectedHosts(key)
 

@@ -64,13 +64,6 @@ func TestServerToClientAndBack(t *testing.T) {
 	wg := sync.WaitGroup{}
 	wg.Add(6)
 
-	server.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
-	client.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
-
 	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(2), message.Headers().OpCode())
 		require.Equal(t, "Funky2!", string(message.Payload()))
@@ -114,16 +107,9 @@ func TestClientToServerWithClientStop(t *testing.T) {
 	client, err := StartControlClient(clientCtx, clientTLSDialer, "localhost")
 	require.NoError(t, err)
 
-	client.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
-
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 
-	server.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
 	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
@@ -143,10 +129,6 @@ func TestClientToServerWithClientStop(t *testing.T) {
 	t.Cleanup(clientCancelFn2)
 	client2, err := StartControlClient(clientCtx2, clientTLSDialer, "localhost")
 	require.NoError(t, err)
-
-	client2.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
 
 	require.NoError(t, client2.SendAndWaitForAck(1, mockMessage("Funky!")))
 
@@ -169,16 +151,9 @@ func TestClientToServerWithServerStop(t *testing.T) {
 	client, err := StartControlClient(clientCtx, clientTLSDialer, "localhost")
 	require.NoError(t, err)
 
-	client.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
-
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	server.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
 	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
@@ -202,9 +177,6 @@ func TestClientToServerWithServerStop(t *testing.T) {
 		<-closedServerSignal
 	})
 
-	server2.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
 	server2.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
@@ -222,13 +194,6 @@ func TestManyMessages(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(1000 * 2)
-
-	server.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
-	client.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
 
 	processed := atomic.NewInt32(0)
 
@@ -346,13 +311,6 @@ func mustSetupInsecure(t *testing.T) (serverCtx context.Context, server service.
 func runSendReceiveTest(t *testing.T, sender service.Service, receiver service.Service) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
-
-	receiver.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
-	sender.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
-		require.NoError(t, err)
-	}))
 
 	receiver.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())

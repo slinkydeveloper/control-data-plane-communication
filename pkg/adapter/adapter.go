@@ -139,7 +139,7 @@ func (a *Adapter) HandleControlMessage(ctx context.Context, msg service.ControlM
 // Returns if ctx is cancelled or Send() returns an error.
 func (a *Adapter) Start(ctx context.Context) error {
 	// Start control server
-	tlsConf, err := network.LoadTLSConfig()
+	tlsConf, err := network.LoadServerTLSConfig()
 	if err != nil {
 		logging.FromContext(ctx).Warnf("Cannot load the TLS config: %v", err)
 		return err

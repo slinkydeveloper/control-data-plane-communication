@@ -22,7 +22,7 @@ var listenConfig = net.ListenConfig{
 	KeepAlive: 30 * time.Second,
 }
 
-func LoadTLSConfig() (*tls.Config, error) {
+func LoadServerTLSConfig() (*tls.Config, error) {
 	dataPlaneCert, err := tls.LoadX509KeyPair(baseCertsPath+"/data_plane_cert.pem", baseCertsPath+"/data_plane_secret.pem")
 	if err != nil {
 		return nil, err
