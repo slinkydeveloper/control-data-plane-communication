@@ -110,7 +110,7 @@ func (a *Adapter) HandleControlMessage(ctx context.Context, msg service.ControlM
 		if err != nil {
 			a.logger.Errorf("Cannot unmarshal the active status. This should not happen, some controller bug?: %v", err)
 		}
-		if active {
+		if active.IsRunning() {
 			a.logger.Debugf("Received resume signal")
 			a.stateMutex.Lock()
 			if a.state == Stopped {

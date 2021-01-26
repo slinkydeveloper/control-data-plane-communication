@@ -20,7 +20,7 @@ func (as ActiveStatus) IsRunning() bool {
 	return bool(as)
 }
 
-func (as ActiveStatus) IsPausing() bool {
+func (as ActiveStatus) IsPaused() bool {
 	return !bool(as)
 }
 
@@ -48,6 +48,14 @@ func (as *ActiveStatus) UnmarshalBinary(data []byte) error {
 	}
 }
 
+func ActiveStatusParser(b []byte) (interface{}, error) {
+	var s ActiveStatus
+	if err := s.UnmarshalBinary(b); err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
 type Duration time.Duration
 
 func (d Duration) MarshalBinary() (data []byte, err error) {
@@ -58,4 +66,12 @@ func (d *Duration) UnmarshalBinary(data []byte) error {
 	d1, err := time.ParseDuration(string(data))
 	*d = Duration(d1)
 	return err
+}
+
+func DurationParser(b []byte) (interface{}, error) {
+	var d Duration
+	if err := d.UnmarshalBinary(b); err != nil {
+		return nil, err
+	}
+	return &d, nil
 }

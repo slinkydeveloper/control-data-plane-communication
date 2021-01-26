@@ -60,7 +60,8 @@ type Reconciler struct {
 	keyPairs      map[types.NamespacedName]*ctrlnetwork.KeyPair
 	keyPairsMutex sync.Mutex
 
-	statusUpdateStore *StatusUpdateStore
+	activeStatusNotificationsStore *ctrlreconciler.NotificationStore
+	intervalNotificationsStore     *ctrlreconciler.NotificationStore
 }
 
 // Check that our Reconciler implements Interface
@@ -158,18 +159,21 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	}
 
 	// --- Reconcile the connections (in our case, only one connection is there)
+	srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
 	conns, err := r.controlConnections.ReconcileConnections(
 		ctx,
 		string(src.UID),
 		[]string{raPodIp},
-		func(s string, service ctrlservice.Service) {
-			srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
-			service.InboundMessageHandler(ctrlservice.ControlMessageHandlerFunc(func(ctx context.Context, message ctrlservice.ControlMessage) {
-				message.Ack()
-				r.statusUpdateStore.ControlMessageHandler(ctx, message.Headers().OpCode(), message.Payload(), s, srcNamespacedName)
+		func(podIp string, service ctrlservice.Service) {
+			service.InboundMessageHandler(ctrlreconciler.NewMessageRouter(map[uint8]ctrlservice.ControlMessageHandler{
+				ctrlsamplesource.NotifyIntervalOpCode:     r.intervalNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp),
+				ctrlsamplesource.NotifyActiveStatusOpCode: r.activeStatusNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp),
 			}))
 		},
-		nil, // TODO Should clean up
+		func(podIp string) {
+			r.intervalNotificationsStore.CleanPodNotification(srcNamespacedName, podIp)
+			r.activeStatusNotificationsStore.CleanPodNotification(srcNamespacedName, podIp)
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("cannot reconcile connections: %w", err)
@@ -195,7 +199,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	// it means we still didn't received that status update message
 	// TODO here we're using interval for simplicity,
 	//  but we may need to find another way to uniquely identify a configuration (hash of the in memory object?)
-	if ackedInterval, ok := r.statusUpdateStore.GetLastUpdate(connectedIp); !ok || ackedInterval != actualInterval {
+	if lastAckedInterval, ok := r.intervalNotificationsStore.GetPodNotification(srcNamespacedName, connectedIp); !ok || time.Duration(*(lastAckedInterval.(*ctrlsamplesource.Duration))) != actualInterval {
 		return nil
 	}
 
@@ -215,7 +219,8 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		src.Status.MarkResuming()
 		logger.Infof("Sent resume command")
 
-		if adapterIsActive, ok := r.statusUpdateStore.GetLastActiveStatus(connectedIp); !ok || !adapterIsActive {
+		activeStatus, ok := r.activeStatusNotificationsStore.GetPodNotification(srcNamespacedName, connectedIp)
+		if !ok || activeStatus.(*ctrlsamplesource.ActiveStatus).IsPaused() {
 			// Short-circuit because we still didn't received the status update
 			return nil
 		}
@@ -233,7 +238,8 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		src.Status.MarkPausing()
 		logger.Infof("Sent stop command")
 
-		if adapterIsActive, ok := r.statusUpdateStore.GetLastActiveStatus(connectedIp); !ok || adapterIsActive {
+		activeStatus, ok := r.activeStatusNotificationsStore.GetPodNotification(srcNamespacedName, connectedIp)
+		if !ok || activeStatus.(*ctrlsamplesource.ActiveStatus).IsRunning() {
 			// Short-circuit because we still didn't received the status update
 			return nil
 		}
@@ -248,6 +254,10 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSource) pkgreconciler.Event {
 	// Check if there is an old ip, so we can cleanup that conn
 	r.controlConnections.RemoveAllConnections(ctx, string(src.UID))
+
+	srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
+	r.intervalNotificationsStore.CleanPodsNotifications(srcNamespacedName)
+	r.activeStatusNotificationsStore.CleanPodsNotifications(srcNamespacedName)
 
 	return nil
 }

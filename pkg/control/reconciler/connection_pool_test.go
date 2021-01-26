@@ -16,21 +16,28 @@ import (
 	"knative.dev/control-data-plane-communication/pkg/control/service"
 )
 
+type mockMessage string
+
+func (m mockMessage) MarshalBinary() (data []byte, err error) {
+	return []byte(m), nil
+}
+
+func (m *mockMessage) UnmarshalBinary(data []byte) error {
+	*m = mockMessage(data)
+	return nil
+}
+
+func parseMockMessage(bytes []byte) (interface{}, error) {
+	var msg mockMessage
+	err := (&msg).UnmarshalBinary(bytes)
+	if err != nil {
+		return nil, err
+	}
+	return &msg, nil
+}
+
 var serverConnectionPoolSetupTestCases = map[string]func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool){
-	"InsecureConnectionPool": func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool) {
-		serverCtx, serverCancelFn := context.WithCancel(ctx)
-
-		server, closedServerSignal, err := network.StartInsecureControlServer(serverCtx)
-		require.NoError(t, err)
-		t.Cleanup(func() {
-			serverCancelFn()
-			<-closedServerSignal
-		})
-
-		connectionPool := NewInsecureControlPlaneConnectionPool(opts...)
-
-		return server, connectionPool
-	},
+	"InsecureConnectionPool": setupInsecureServerAndConnectionPool,
 	"TLSConnectionPool": func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool) {
 		serverCtx, serverCancelFn := context.WithCancel(ctx)
 
@@ -145,12 +152,6 @@ func mustGenerateTLSServerConf(t *testing.T, certManager *network.CertificateMan
 	}
 }
 
-type mockMessage string
-
-func (m mockMessage) MarshalBinary() (data []byte, err error) {
-	return []byte(m), nil
-}
-
 func runSendReceiveTest(t *testing.T, sender service.Service, receiver service.Service) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -172,4 +173,19 @@ func runSendReceiveTest(t *testing.T, sender service.Service, receiver service.S
 	require.NoError(t, sender.SendAndWaitForAck(1, mockMessage("Funky!")))
 
 	wg.Wait()
+}
+
+func setupInsecureServerAndConnectionPool(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool) {
+	serverCtx, serverCancelFn := context.WithCancel(ctx)
+
+	server, closedServerSignal, err := network.StartInsecureControlServer(serverCtx)
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		serverCancelFn()
+		<-closedServerSignal
+	})
+
+	connectionPool := NewInsecureControlPlaneConnectionPool(opts...)
+
+	return server, connectionPool
 }

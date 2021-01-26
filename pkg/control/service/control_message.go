@@ -1,6 +1,8 @@
 package service
 
-import ctrl "knative.dev/control-data-plane-communication/pkg/control"
+import (
+	ctrl "knative.dev/control-data-plane-communication/pkg/control"
+)
 
 type ControlMessage struct {
 	inboundMessage *ctrl.InboundMessage

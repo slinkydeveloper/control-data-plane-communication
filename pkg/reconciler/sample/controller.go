@@ -18,7 +18,6 @@ package sample
 
 import (
 	"context"
-	"time"
 
 	"k8s.io/apimachinery/pkg/types"
 	reconcilersource "knative.dev/eventing/pkg/reconciler/source"
@@ -29,6 +28,7 @@ import (
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	"knative.dev/control-data-plane-communication/pkg/control/network"
 	ctrlreconciler "knative.dev/control-data-plane-communication/pkg/control/reconciler"
+	ctrlsamplesource "knative.dev/control-data-plane-communication/pkg/control/samplesource"
 
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
@@ -64,7 +64,10 @@ func NewController(
 		// Config accessor takes care of tracing/config/logging config propagation to the receive adapter
 		configAccessor:     reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
 		certificateManager: certManager,
-		controlConnections: ctrlreconciler.NewControlPlaneConnectionPool(certManager),
+		controlConnections: ctrlreconciler.NewControlPlaneConnectionPool(
+			certManager,
+			ctrlreconciler.WithServiceWrapper(ctrlreconciler.WithCachingService(ctx)),
+		),
 
 		keyPairs: make(map[types.NamespacedName]*network.KeyPair),
 	}
@@ -75,11 +78,8 @@ func NewController(
 	impl := samplesource.NewImpl(ctx, r)
 
 	r.sinkResolver = resolver.NewURIResolver(ctx, impl.EnqueueKey)
-	r.statusUpdateStore = &StatusUpdateStore{
-		enqueueKey:                impl.EnqueueKey,
-		lastReceivedIntervalAcked: make(map[string]time.Duration),
-		isActive:                  make(map[string]bool),
-	}
+	r.intervalNotificationsStore = ctrlreconciler.NewNotificationStore(impl.EnqueueKey, ctrlsamplesource.DurationParser, ctrlreconciler.PassNewValue)
+	r.activeStatusNotificationsStore = ctrlreconciler.NewNotificationStore(impl.EnqueueKey, ctrlsamplesource.ActiveStatusParser, ctrlreconciler.PassNewValue)
 
 	logging.FromContext(ctx).Info("Setting up event handlers")
 
