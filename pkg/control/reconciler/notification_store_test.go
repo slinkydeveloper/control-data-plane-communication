@@ -21,14 +21,9 @@ func setupNotificationStoreTest(t *testing.T) (ctrlservice.Service, *atomic.Int3
 	notificationsStore := NewNotificationStore(func(name types.NamespacedName) {
 		require.Equal(t, expectedNamespacedName, name)
 		enqueueKeyInvoked.Inc()
-	}, parseMockMessage, func(old interface{}, new interface{}) interface{} {
-		oldMsg := old.(*mockMessage)
-		newMsg := new.(*mockMessage)
-		merged := mockMessage(string(*oldMsg) + string(*newMsg))
-		return &merged
-	})
+	}, parseMockMessage)
 
-	dataPlane.InboundMessageHandler(notificationsStore.ControlMessageHandler(expectedNamespacedName, expectedPodIp))
+	dataPlane.InboundMessageHandler(notificationsStore.ControlMessageHandler(expectedNamespacedName, expectedPodIp, mockValueMerger))
 
 	return controlPlane, enqueueKeyInvoked, notificationsStore, expectedNamespacedName, expectedPodIp
 }
@@ -59,9 +54,9 @@ func TestNotificationStore_DontReconcileTwice(t *testing.T) {
 	notificationsStore := NewNotificationStore(func(name types.NamespacedName) {
 		require.Equal(t, expectedNamespacedName, name)
 		enqueueKeyInvoked.Inc()
-	}, parseMockMessage, PassNewValue)
+	}, parseMockMessage)
 
-	dataPlane.InboundMessageHandler(notificationsStore.ControlMessageHandler(expectedNamespacedName, expectedPodIp))
+	dataPlane.InboundMessageHandler(notificationsStore.ControlMessageHandler(expectedNamespacedName, expectedPodIp, PassNewValue))
 
 	require.NoError(t, controlPlane.SendAndWaitForAck(1, mockMessage("Funky!")))
 	require.NoError(t, controlPlane.SendAndWaitForAck(1, mockMessage("Funky!")))

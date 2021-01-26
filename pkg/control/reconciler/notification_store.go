@@ -15,7 +15,6 @@ type NotificationStore struct {
 	enqueueKey func(name types.NamespacedName)
 
 	payloadParser PayloadParser
-	valueMerger   ValueMerger
 
 	// Map indexed with types.NamespacedName and another sync map as values
 	notificationStoreMutex sync.RWMutex
@@ -30,16 +29,15 @@ func PassNewValue(old interface{}, new interface{}) interface{} {
 	return new
 }
 
-func NewNotificationStore(enqueueKey func(name types.NamespacedName), parser PayloadParser, valueMerger ValueMerger) *NotificationStore {
+func NewNotificationStore(enqueueKey func(name types.NamespacedName), parser PayloadParser) *NotificationStore {
 	return &NotificationStore{
 		enqueueKey:        enqueueKey,
 		payloadParser:     parser,
-		valueMerger:       valueMerger,
 		notificationStore: make(map[types.NamespacedName]map[string]interface{}),
 	}
 }
 
-func (n *NotificationStore) ControlMessageHandler(srcName types.NamespacedName, pod string) ctrlservice.ControlMessageHandler {
+func (n *NotificationStore) ControlMessageHandler(srcName types.NamespacedName, pod string, valueMerger ValueMerger) ctrlservice.ControlMessageHandler {
 	return ctrlservice.ControlMessageHandlerFunc(func(ctx context.Context, message ctrlservice.ControlMessage) {
 		// Parse the payload
 		parsedPayload, err := n.payloadParser(message.Payload())
@@ -53,7 +51,7 @@ func (n *NotificationStore) ControlMessageHandler(srcName types.NamespacedName, 
 		}
 
 		// Store new value in the notification store
-		shouldRunReconcile := n.storeNewValue(srcName, pod, parsedPayload)
+		shouldRunReconcile := n.storeNewValue(srcName, pod, valueMerger, parsedPayload)
 
 		// Ack the message
 		message.Ack()
@@ -106,7 +104,7 @@ func (n *NotificationStore) CleanPodNotification(srcName types.NamespacedName, p
 	}
 }
 
-func (n *NotificationStore) storeNewValue(srcName types.NamespacedName, pod string, newValue interface{}) bool {
+func (n *NotificationStore) storeNewValue(srcName types.NamespacedName, pod string, valueMerger ValueMerger, newValue interface{}) bool {
 	n.notificationStoreMutex.Lock()
 	defer n.notificationStoreMutex.Unlock()
 
@@ -119,7 +117,7 @@ func (n *NotificationStore) storeNewValue(srcName types.NamespacedName, pod stri
 	oldValue, ok := podsNotifications[pod]
 	valueToStore := oldValue
 	if ok {
-		valueToStore = n.valueMerger(valueToStore, newValue)
+		valueToStore = valueMerger(valueToStore, newValue)
 	} else {
 		valueToStore = newValue
 	}

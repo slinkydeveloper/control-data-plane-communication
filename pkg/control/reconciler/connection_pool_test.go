@@ -36,6 +36,13 @@ func parseMockMessage(bytes []byte) (interface{}, error) {
 	return &msg, nil
 }
 
+func mockValueMerger(old interface{}, new interface{}) interface{} {
+	oldMsg := old.(*mockMessage)
+	newMsg := new.(*mockMessage)
+	merged := mockMessage(string(*oldMsg) + string(*newMsg))
+	return &merged
+}
+
 var serverConnectionPoolSetupTestCases = map[string]func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool){
 	"InsecureConnectionPool": setupInsecureServerAndConnectionPool,
 	"TLSConnectionPool": func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool) {
