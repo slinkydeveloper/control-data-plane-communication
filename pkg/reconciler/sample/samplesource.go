@@ -38,8 +38,10 @@ import (
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
-	"knative.dev/control-data-plane-communication/pkg/control"
-	"knative.dev/control-data-plane-communication/pkg/controlprotocol"
+	ctrlnetwork "knative.dev/control-data-plane-communication/pkg/control/network"
+	ctrlreconciler "knative.dev/control-data-plane-communication/pkg/control/reconciler"
+	ctrlsamplesource "knative.dev/control-data-plane-communication/pkg/control/samplesource"
+	ctrlservice "knative.dev/control-data-plane-communication/pkg/control/service"
 	"knative.dev/control-data-plane-communication/pkg/reconciler"
 	"knative.dev/control-data-plane-communication/pkg/reconciler/sample/resources"
 )
@@ -52,20 +54,14 @@ type Reconciler struct {
 	sinkResolver   *resolver.URIResolver
 	configAccessor reconcilersource.ConfigAccessor
 
-	certificateManager *controlprotocol.CertificateManager
-	controlConnections *controlprotocol.ControlPlaneConnectionPool
+	certificateManager *ctrlnetwork.CertificateManager
+	controlConnections *ctrlreconciler.ControlPlaneConnectionPool
 
-	keyPairs      map[types.NamespacedName]*controlprotocol.KeyPair
+	keyPairs      map[types.NamespacedName]*ctrlnetwork.KeyPair
 	keyPairsMutex sync.Mutex
 
-	// TODO abstract this
-	lastSentStateIsActive map[string]bool
-	lastSentStateMutex    sync.Mutex
-	// TODO abstract this
-	lastIntervalUpdateSent     map[string]time.Duration
-	lastIntervalUpdateSentLock sync.Mutex
-
-	statusUpdateStore *StatusUpdateStore
+	activeStatusNotificationsStore *ctrlreconciler.NotificationStore
+	intervalNotificationsStore     *ctrlreconciler.NotificationStore
 }
 
 // Check that our Reconciler implements Interface
@@ -82,7 +78,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		Name:      resources.MakeReceiveAdapterDeploymentName(src),
 		Namespace: src.Namespace,
 	}
-	var dataPlaneKeyPair *controlprotocol.KeyPair
+	var dataPlaneKeyPair *ctrlnetwork.KeyPair
 	if dataPlaneKeyPair, _ = r.getKeyPair(raNamespacedName); dataPlaneKeyPair == nil {
 		var err error
 		dataPlaneKeyPair, err = r.certificateManager.EmitNewDataPlaneCertificate(ctx)
@@ -163,18 +159,21 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	}
 
 	// --- Reconcile the connections (in our case, only one connection is there)
+	srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
 	conns, err := r.controlConnections.ReconcileConnections(
 		ctx,
 		string(src.UID),
 		[]string{raPodIp},
-		func(s string, service controlprotocol.Service) {
-			srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
-			service.InboundMessageHandler(controlprotocol.ControlMessageHandlerFunc(func(ctx context.Context, message controlprotocol.ControlMessage) {
-				message.Ack()
-				r.statusUpdateStore.ControlMessageHandler(ctx, message.Headers().OpCode(), message.Payload(), s, srcNamespacedName)
+		func(podIp string, service ctrlservice.Service) {
+			service.InboundMessageHandler(ctrlreconciler.NewMessageRouter(map[uint8]ctrlservice.ControlMessageHandler{
+				ctrlsamplesource.NotifyIntervalOpCode:     r.intervalNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp),
+				ctrlsamplesource.NotifyActiveStatusOpCode: r.activeStatusNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp),
 			}))
 		},
-		nil, // TODO Should clean up
+		func(podIp string) {
+			r.intervalNotificationsStore.CleanPodNotification(srcNamespacedName, podIp)
+			r.activeStatusNotificationsStore.CleanPodNotification(srcNamespacedName, podIp)
+		},
 	)
 	if err != nil {
 		return fmt.Errorf("cannot reconcile connections: %w", err)
@@ -186,17 +185,10 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 	// TODO lionel add your fancy MT scheduler here!
 
-	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
-	if old, ok := r.getLastSentInterval(connectedIp); !ok || old != actualInterval {
-		err := ctrl.SendAndWaitForAck(control.UpdateIntervalOpCode, control.Duration(actualInterval))
-		if err != nil {
-			return fmt.Errorf("cannot send the event to the pod: %w", err)
-		}
-
-		r.lastIntervalUpdateSentLock.Lock()
-		r.lastIntervalUpdateSent[connectedIp] = actualInterval
-		r.lastIntervalUpdateSentLock.Unlock()
+	err = ctrl.SendAndWaitForAck(ctrlsamplesource.UpdateIntervalOpCode, ctrlsamplesource.Duration(actualInterval))
+	if err != nil {
+		return fmt.Errorf("cannot send the event to the pod: %w", err)
 	}
 
 	logger.Infof("we have sent the interval update")
@@ -207,7 +199,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	// it means we still didn't received that status update message
 	// TODO here we're using interval for simplicity,
 	//  but we may need to find another way to uniquely identify a configuration (hash of the in memory object?)
-	if ackedInterval, ok := r.statusUpdateStore.GetLastUpdate(connectedIp); !ok || ackedInterval != actualInterval {
+	if lastAckedInterval, ok := r.intervalNotificationsStore.GetPodNotification(srcNamespacedName, connectedIp); !ok || time.Duration(*(lastAckedInterval.(*ctrlsamplesource.Duration))) != actualInterval {
 		return nil
 	}
 
@@ -220,18 +212,15 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		logger.Infof("Reconciling active status")
 
 		// Reconcile active
-		if sentResumeSignal, ok := r.getLastSentSignal(connectedIp); !ok || !sentResumeSignal {
-			err := ctrl.SendSignalAndWaitForAck(control.ResumeOpCode)
-			if err != nil {
-				return fmt.Errorf("cannot send the event to the pod: %w", err)
-			}
-
-			r.setLastSentSignal(connectedIp, true)
+		err := ctrl.SendAndWaitForAck(ctrlsamplesource.UpdateActiveStatusOpCode, ctrlsamplesource.ActiveStatus(true))
+		if err != nil {
+			return fmt.Errorf("cannot send the event to the pod: %w", err)
 		}
 		src.Status.MarkResuming()
 		logger.Infof("Sent resume command")
 
-		if adapterIsActive, ok := r.statusUpdateStore.GetLastActiveStatus(connectedIp); !ok || !adapterIsActive {
+		activeStatus, ok := r.activeStatusNotificationsStore.GetPodNotification(srcNamespacedName, connectedIp)
+		if !ok || activeStatus.(*ctrlsamplesource.ActiveStatus).IsPaused() {
 			// Short-circuit because we still didn't received the status update
 			return nil
 		}
@@ -242,18 +231,15 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		logger.Infof("Reconciling stop status")
 
 		// Reconcile stop
-		if sentResumeSignal, ok := r.getLastSentSignal(connectedIp); !ok || sentResumeSignal {
-			err := ctrl.SendSignalAndWaitForAck(control.StopOpCode)
-			if err != nil {
-				return fmt.Errorf("cannot send the event to the pod: %w", err)
-			}
-
-			r.setLastSentSignal(connectedIp, false)
+		err := ctrl.SendAndWaitForAck(ctrlsamplesource.UpdateActiveStatusOpCode, ctrlsamplesource.ActiveStatus(false))
+		if err != nil {
+			return fmt.Errorf("cannot send the event to the pod: %w", err)
 		}
 		src.Status.MarkPausing()
 		logger.Infof("Sent stop command")
 
-		if adapterIsActive, ok := r.statusUpdateStore.GetLastActiveStatus(connectedIp); !ok || adapterIsActive {
+		activeStatus, ok := r.activeStatusNotificationsStore.GetPodNotification(srcNamespacedName, connectedIp)
+		if !ok || activeStatus.(*ctrlsamplesource.ActiveStatus).IsRunning() {
 			// Short-circuit because we still didn't received the status update
 			return nil
 		}
@@ -269,34 +255,18 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSourc
 	// Check if there is an old ip, so we can cleanup that conn
 	r.controlConnections.RemoveAllConnections(ctx, string(src.UID))
 
+	srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
+	r.intervalNotificationsStore.CleanPodsNotifications(srcNamespacedName)
+	r.activeStatusNotificationsStore.CleanPodsNotifications(srcNamespacedName)
+
 	return nil
 }
 
-func (r *Reconciler) getKeyPair(name types.NamespacedName) (*controlprotocol.KeyPair, bool) {
+func (r *Reconciler) getKeyPair(name types.NamespacedName) (*ctrlnetwork.KeyPair, bool) {
 	r.keyPairsMutex.Lock()
 	defer r.keyPairsMutex.Unlock()
 	kp, ok := r.keyPairs[name]
 	return kp, ok
-}
-
-func (r *Reconciler) getLastSentInterval(podIp string) (time.Duration, bool) {
-	r.lastIntervalUpdateSentLock.Lock()
-	defer r.lastIntervalUpdateSentLock.Unlock()
-	t, ok := r.lastIntervalUpdateSent[podIp]
-	return t, ok
-}
-
-func (r *Reconciler) setLastSentSignal(podIp string, active bool) {
-	r.lastSentStateMutex.Lock()
-	r.lastSentStateIsActive[podIp] = active
-	defer r.lastSentStateMutex.Unlock()
-}
-
-func (r *Reconciler) getLastSentSignal(podIp string) (bool, bool) {
-	r.lastSentStateMutex.Lock()
-	defer r.lastSentStateMutex.Unlock()
-	b, ok := r.lastSentStateIsActive[podIp]
-	return b, ok
 }
 
 func makeSinkBinding(src *v1alpha1.SampleSource) *sourcesv1.SinkBinding {

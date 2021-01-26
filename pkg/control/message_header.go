@@ -1,4 +1,4 @@
-package controlprotocol
+package control
 
 import (
 	"encoding/binary"

@@ -1,4 +1,4 @@
-package controlprotocol
+package network
 
 import (
 	"context"
@@ -232,7 +232,11 @@ func NewCertificateManager(ctx context.Context) (*CertificateManager, error) {
 	}, nil
 }
 
-func (cm *CertificateManager) CaCert() *pem.Block {
+func (cm *CertificateManager) CaCert() *x509.Certificate {
+	return cm.caCert
+}
+
+func (cm *CertificateManager) CaCertPem() *pem.Block {
 	return cm.caCertPem
 }
 
@@ -244,9 +248,9 @@ func (cm *CertificateManager) EmitNewDataPlaneCertificate(ctx context.Context) (
 	return CreateDataPlaneCert(ctx, cm.caPrivateKey, cm.caCert)
 }
 
-func createTLSDialer(certificateManager *CertificateManager, baseDialOptions *net.Dialer) (*tls.Dialer, error) {
-	caCert := certificateManager.caCert
-	controlPlaneKeyPair := certificateManager.controllerKeyPair
+func (cm *CertificateManager) GenerateTLSDialer(baseDialOptions *net.Dialer) (*tls.Dialer, error) {
+	caCert := cm.caCert
+	controlPlaneKeyPair := cm.controllerKeyPair
 
 	controlPlaneCert, err := tls.X509KeyPair(controlPlaneKeyPair.CertBytes(), controlPlaneKeyPair.PrivateKeyBytes())
 	if err != nil {

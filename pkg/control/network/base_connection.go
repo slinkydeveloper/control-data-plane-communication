@@ -1,4 +1,4 @@
-package controlprotocol
+package network
 
 import (
 	"context"
@@ -6,18 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"regexp"
 	"sync"
 
 	"go.uber.org/zap"
-)
 
-// Connection handles the low level stuff, reading and writing to the wire
-type Connection interface {
-	OutboundMessages() chan<- *OutboundMessage
-	InboundMessages() <-chan *InboundMessage
-	// On this channel we get only very bad, usually fatal, errors (like cannot re-establish the connection after several attempts)
-	Errors() <-chan error
-}
+	ctrl "knative.dev/control-data-plane-communication/pkg/control"
+)
 
 type baseTcpConnection struct {
 	ctx    context.Context
@@ -26,16 +21,16 @@ type baseTcpConnection struct {
 	conn      net.Conn
 	connMutex sync.RWMutex
 
-	outboundMessageChannel chan *OutboundMessage
-	inboundMessageChannel  chan *InboundMessage
+	outboundMessageChannel chan *ctrl.OutboundMessage
+	inboundMessageChannel  chan *ctrl.InboundMessage
 	errors                 chan error
 }
 
-func (t *baseTcpConnection) OutboundMessages() chan<- *OutboundMessage {
+func (t *baseTcpConnection) OutboundMessages() chan<- *ctrl.OutboundMessage {
 	return t.outboundMessageChannel
 }
 
-func (t *baseTcpConnection) InboundMessages() <-chan *InboundMessage {
+func (t *baseTcpConnection) InboundMessages() <-chan *ctrl.InboundMessage {
 	return t.inboundMessageChannel
 }
 
@@ -44,7 +39,7 @@ func (t *baseTcpConnection) Errors() <-chan error {
 }
 
 func (t *baseTcpConnection) read() error {
-	msg := &InboundMessage{}
+	msg := &ctrl.InboundMessage{}
 	t.connMutex.RLock()
 	n, err := msg.ReadFrom(t.conn)
 	t.connMutex.RUnlock()
@@ -59,7 +54,7 @@ func (t *baseTcpConnection) read() error {
 	return nil
 }
 
-func (t *baseTcpConnection) write(msg *OutboundMessage) error {
+func (t *baseTcpConnection) write(msg *ctrl.OutboundMessage) error {
 	t.connMutex.RLock()
 	n, err := msg.WriteTo(t.conn)
 	t.connMutex.RUnlock()
@@ -144,7 +139,7 @@ func (t *baseTcpConnection) consumeConnection(conn net.Conn) {
 	t.connMutex.RLock()
 	err := t.conn.Close()
 	t.connMutex.RUnlock()
-	if err != nil && !isEOF(err) {
+	if err != nil && !isEOF(err) && !isUseOfClosedConnection(err) {
 		t.logger.Warnf("Error while closing the previous connection: %s", err)
 	}
 }
@@ -158,7 +153,7 @@ func (t *baseTcpConnection) tryPropagateError(ctx context.Context, err error) {
 	}
 }
 
-func (t *baseTcpConnection) tryPushOutboundChannel(ctx context.Context, msg *OutboundMessage) {
+func (t *baseTcpConnection) tryPushOutboundChannel(ctx context.Context, msg *ctrl.OutboundMessage) {
 	select {
 	case <-ctx.Done():
 		return
@@ -176,6 +171,9 @@ func (t *baseTcpConnection) close() (err error) {
 	close(t.inboundMessageChannel)
 	close(t.outboundMessageChannel)
 	close(t.errors)
+	if err == nil || isEOF(err) || isUseOfClosedConnection(err) {
+		return nil
+	}
 	return err
 }
 
@@ -191,4 +189,11 @@ func isTransientError(err error) bool {
 
 func isEOF(err error) bool {
 	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
+}
+
+var isUseOfClosedConnectionRegex = regexp.MustCompile("use of closed.* connection")
+
+func isUseOfClosedConnection(err error) bool {
+	// Don't rely on this check, it's just used to reduce logging noise, it shouldn't be used as assertion
+	return isUseOfClosedConnectionRegex.MatchString(err.Error())
 }
