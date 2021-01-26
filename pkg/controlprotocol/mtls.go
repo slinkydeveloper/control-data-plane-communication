@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"net"
 	"time"
 
 	"go.uber.org/zap"
@@ -240,4 +242,30 @@ func (cm *CertificateManager) CaCertBytes() []byte {
 
 func (cm *CertificateManager) EmitNewDataPlaneCertificate(ctx context.Context) (*KeyPair, error) {
 	return CreateDataPlaneCert(ctx, cm.caPrivateKey, cm.caCert)
+}
+
+func createTLSDialer(certificateManager *CertificateManager, baseDialOptions *net.Dialer) (*tls.Dialer, error) {
+	caCert := certificateManager.caCert
+	controlPlaneKeyPair := certificateManager.controllerKeyPair
+
+	controlPlaneCert, err := tls.X509KeyPair(controlPlaneKeyPair.CertBytes(), controlPlaneKeyPair.PrivateKeyBytes())
+	if err != nil {
+		return nil, err
+	}
+	certPool := x509.NewCertPool()
+	certPool.AddCert(caCert)
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{controlPlaneCert},
+		RootCAs:      certPool,
+		ServerName:   fakeDnsName,
+	}
+
+	// Copy from base dial options
+	dialOptions := *baseDialOptions
+
+	return &tls.Dialer{
+		NetDialer: &dialOptions,
+		Config:    tlsConfig,
+	}, nil
 }

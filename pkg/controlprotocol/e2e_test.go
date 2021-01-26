@@ -35,6 +35,11 @@ func TestClientToServer(t *testing.T) {
 	sendReceiveTest(t, client, server)
 }
 
+func TestNoopMessageHandlerAcks(t *testing.T) {
+	_, server, _, _ := mustSetupWithTLS(t)
+	require.NoError(t, server.SendSignalAndWaitForAck(10))
+}
+
 func TestInsecureServerToClient(t *testing.T) {
 	_, server, _, client := mustSetupInsecure(t)
 	sendReceiveTest(t, server, client)
@@ -253,24 +258,28 @@ func TestManyMessages(t *testing.T) {
 	logging.FromContext(ctx).Infof("Processed: %d", processed.Load())
 }
 
-func testTLSConf(t *testing.T, ctx context.Context) (*tls.Config, *tls.Dialer) {
-	cm, err := NewCertificateManager(ctx)
-	require.NoError(t, err)
-
-	dataPlaneKeyPair, err := cm.EmitNewDataPlaneCertificate(context.TODO())
+func mustGenerateTLSServerConf(t *testing.T, certManager *CertificateManager) *tls.Config {
+	dataPlaneKeyPair, err := certManager.EmitNewDataPlaneCertificate(context.TODO())
 	require.NoError(t, err)
 
 	dataPlaneCert, err := tls.X509KeyPair(dataPlaneKeyPair.CertBytes(), dataPlaneKeyPair.PrivateKeyBytes())
 	require.NoError(t, err)
 
 	certPool := x509.NewCertPool()
-	certPool.AddCert(cm.caCert)
-	serverTLSConf := &tls.Config{
+	certPool.AddCert(certManager.caCert)
+	return &tls.Config{
 		Certificates: []tls.Certificate{dataPlaneCert},
 		ClientCAs:    certPool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
 		ServerName:   fakeDnsName,
 	}
+}
+
+func testTLSConf(t *testing.T, ctx context.Context) (*tls.Config, *tls.Dialer) {
+	cm, err := NewCertificateManager(ctx)
+	require.NoError(t, err)
+
+	serverTLSConf := mustGenerateTLSServerConf(t, cm)
 
 	tlsDialer, err := createTLSDialer(cm, &net.Dialer{
 		KeepAlive: keepAlive,
