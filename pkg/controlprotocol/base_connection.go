@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"net"
-	"strings"
 	"sync"
 
 	"go.uber.org/zap"
@@ -98,20 +97,16 @@ func (t *baseTcpConnection) consumeConnection(conn net.Conn) {
 				}
 				err := t.write(msg)
 				if err != nil {
-					if isDisconnection(err) {
-						return
-					} else if !isTransientError(err) {
-						// We don't retry for non transient errors
-						t.errors <- err
+					if isEOF(err) {
+						return // Closed conn
+					}
+					t.tryPropagateError(closedConnCtx, err)
+					if !isTransientError(err) {
+						return // Broken conn
 					}
 
 					// Try to send to outboundMessageChannel if context not closed
-					select {
-					case <-t.ctx.Done():
-						return
-					default:
-						t.outboundMessageChannel <- msg
-					}
+					t.tryPushOutboundChannel(closedConnCtx, msg)
 				}
 			case <-closedConnCtx.Done():
 				return
@@ -125,11 +120,12 @@ func (t *baseTcpConnection) consumeConnection(conn net.Conn) {
 			// Blocking read
 			err := t.read()
 			if err != nil {
-				if isDisconnection(err) {
-					return
-				} else if !isTransientError(err) {
-					// Everything is bad except transient errors and io.EOF
-					t.errors <- err
+				if isEOF(err) {
+					return // Closed conn
+				}
+				t.tryPropagateError(closedConnCtx, err)
+				if !isTransientError(err) {
+					return // Broken conn
 				}
 			}
 
@@ -148,8 +144,26 @@ func (t *baseTcpConnection) consumeConnection(conn net.Conn) {
 	t.connMutex.RLock()
 	err := t.conn.Close()
 	t.connMutex.RUnlock()
-	if err != nil && !isDisconnection(err) {
+	if err != nil && !isEOF(err) {
 		t.logger.Warnf("Error while closing the previous connection: %s", err)
+	}
+}
+
+func (t *baseTcpConnection) tryPropagateError(ctx context.Context, err error) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		t.errors <- err
+	}
+}
+
+func (t *baseTcpConnection) tryPushOutboundChannel(ctx context.Context, msg *OutboundMessage) {
+	select {
+	case <-ctx.Done():
+		return
+	default:
+		t.outboundMessageChannel <- msg
 	}
 }
 
@@ -175,15 +189,6 @@ func isTransientError(err error) bool {
 	return false
 }
 
-// Check connection closed https://stackoverflow.com/questions/12741386/how-to-know-tcp-connection-is-closed-in-net-package
-func isDisconnection(err error) bool {
-	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
-		return true
-	}
-
-	if neterr, ok := err.(*net.OpError); ok && strings.Contains(neterr.Error(), "close") {
-		return true
-	}
-
-	return false
+func isEOF(err error) bool {
+	return errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF)
 }
