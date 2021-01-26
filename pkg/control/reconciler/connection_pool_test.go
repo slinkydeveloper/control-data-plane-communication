@@ -12,79 +12,123 @@ import (
 	"go.uber.org/zap"
 	"knative.dev/pkg/logging"
 
-	"knative.dev/control-data-plane-communication/pkg/control/protocol"
+	"knative.dev/control-data-plane-communication/pkg/control/network"
+	"knative.dev/control-data-plane-communication/pkg/control/service"
 )
 
-func TestInsecureConnectionPool_ReconcileConnections(t *testing.T) {
+var serverConnectionPoolSetupTestCases = map[string]func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool){
+	"InsecureConnectionPool": func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool) {
+		serverCtx, serverCancelFn := context.WithCancel(ctx)
+
+		server, closedServerSignal, err := network.StartInsecureControlServer(serverCtx)
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			serverCancelFn()
+			<-closedServerSignal
+		})
+
+		connectionPool := NewInsecureControlPlaneConnectionPool(opts...)
+
+		return server, connectionPool
+	},
+	"TLSConnectionPool": func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool) {
+		serverCtx, serverCancelFn := context.WithCancel(ctx)
+
+		certManager, err := network.NewCertificateManager(ctx)
+		require.NoError(t, err)
+
+		server, closedServerSignal, err := network.StartControlServer(serverCtx, mustGenerateTLSServerConf(t, certManager))
+		require.NoError(t, err)
+		t.Cleanup(func() {
+			serverCancelFn()
+			<-closedServerSignal
+		})
+
+		connectionPool := NewControlPlaneConnectionPool(certManager, opts...)
+
+		return server, connectionPool
+	},
+}
+
+func TestReconcileConnections(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 
-	serverCtx, serverCancelFn := context.WithCancel(ctx)
+	for name, setupFn := range serverConnectionPoolSetupTestCases {
+		t.Run(name, func(t *testing.T) {
+			server, connectionPool := setupFn(t, ctx)
 
-	server, closedServerSignal, err := protocol.StartInsecureControlServer(serverCtx)
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		serverCancelFn()
-		<-closedServerSignal
-	})
+			newServiceInvokedCounter := atomic.NewInt32(0)
+			oldServiceInvokedCounter := atomic.NewInt32(0)
 
-	connectionPool := NewInsecureControlPlaneConnectionPool()
+			conns, err := connectionPool.ReconcileConnections(context.TODO(), "hello", []string{"127.0.0.1"}, func(string, service.Service) {
+				newServiceInvokedCounter.Inc()
+			}, func(string) {
+				oldServiceInvokedCounter.Inc()
+			})
+			require.NoError(t, err)
+			require.Contains(t, conns, "127.0.0.1")
+			require.Equal(t, int32(1), newServiceInvokedCounter.Load())
+			require.Equal(t, int32(0), oldServiceInvokedCounter.Load())
 
-	connectionPoolReconcileTest(t, server, connectionPool)
+			runSendReceiveTest(t, server, conns["127.0.0.1"])
+
+			newServiceInvokedCounter.Store(0)
+			oldServiceInvokedCounter.Store(0)
+
+			conns, err = connectionPool.ReconcileConnections(context.TODO(), "hello", []string{}, func(string, service.Service) {
+				newServiceInvokedCounter.Inc()
+			}, func(string) {
+				oldServiceInvokedCounter.Inc()
+			})
+			require.NoError(t, err)
+			require.NotContains(t, conns, "127.0.0.1")
+			require.Equal(t, int32(0), newServiceInvokedCounter.Load())
+			require.Equal(t, int32(1), oldServiceInvokedCounter.Load())
+
+		})
+	}
 }
 
-func TestTLSConnectionPool_ReconcileConnections(t *testing.T) {
+func TestCachingWrapper(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
+	for name, setupFn := range serverConnectionPoolSetupTestCases {
+		t.Run(name, func(t *testing.T) {
+			dataPlane, connectionPool := setupFn(t, ctx, WithServiceWrapper(WithCachingService(ctx)))
 
-	serverCtx, serverCancelFn := context.WithCancel(ctx)
+			conns, err := connectionPool.ReconcileConnections(context.TODO(), "hello", []string{"127.0.0.1"}, nil, nil)
+			require.NoError(t, err)
+			require.Contains(t, conns, "127.0.0.1")
 
-	certManager, err := protocol.NewCertificateManager(ctx)
-	require.NoError(t, err)
+			controlPlane := conns["127.0.0.1"]
 
-	server, closedServerSignal, err := protocol.StartControlServer(serverCtx, mustGenerateTLSServerConf(t, certManager))
-	require.NoError(t, err)
-	t.Cleanup(func() {
-		serverCancelFn()
-		<-closedServerSignal
-	})
+			messageReceivedCounter := atomic.NewInt32(0)
 
-	connectionPool := NewControlPlaneConnectionPool(certManager)
+			dataPlane.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
+				require.NoError(t, err)
+			}))
+			controlPlane.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
+				require.NoError(t, err)
+			}))
 
-	connectionPoolReconcileTest(t, server, connectionPool)
+			dataPlane.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+				require.Equal(t, uint8(1), message.Headers().OpCode())
+				require.Equal(t, "Funky!", string(message.Payload()))
+				message.Ack()
+				messageReceivedCounter.Inc()
+			}))
+
+			for i := 0; i < 10; i++ {
+				require.NoError(t, controlPlane.SendAndWaitForAck(1, mockMessage("Funky!")))
+			}
+
+			require.Equal(t, int32(1), messageReceivedCounter.Load())
+		})
+	}
 }
 
-func connectionPoolReconcileTest(t *testing.T, server protocol.Service, connectionPool *ControlPlaneConnectionPool) {
-	newServiceInvokedCounter := atomic.NewInt32(0)
-	oldServiceInvokedCounter := atomic.NewInt32(0)
-
-	conns, err := connectionPool.ReconcileConnections(context.TODO(), "hello", []string{"127.0.0.1"}, func(string, protocol.Service) {
-		newServiceInvokedCounter.Inc()
-	}, func(string) {
-		oldServiceInvokedCounter.Inc()
-	})
-	require.NoError(t, err)
-	require.Contains(t, conns, "127.0.0.1")
-	require.Equal(t, int32(1), newServiceInvokedCounter.Load())
-	require.Equal(t, int32(0), oldServiceInvokedCounter.Load())
-
-	runSendReceiveTest(t, server, conns["127.0.0.1"])
-
-	newServiceInvokedCounter.Store(0)
-	oldServiceInvokedCounter.Store(0)
-
-	conns, err = connectionPool.ReconcileConnections(context.TODO(), "hello", []string{}, func(string, protocol.Service) {
-		newServiceInvokedCounter.Inc()
-	}, func(string) {
-		oldServiceInvokedCounter.Inc()
-	})
-	require.NoError(t, err)
-	require.NotContains(t, conns, "127.0.0.1")
-	require.Equal(t, int32(0), newServiceInvokedCounter.Load())
-	require.Equal(t, int32(1), oldServiceInvokedCounter.Load())
-}
-
-func mustGenerateTLSServerConf(t *testing.T, certManager *protocol.CertificateManager) *tls.Config {
+func mustGenerateTLSServerConf(t *testing.T, certManager *network.CertificateManager) *tls.Config {
 	dataPlaneKeyPair, err := certManager.EmitNewDataPlaneCertificate(context.TODO())
 	require.NoError(t, err)
 
@@ -101,25 +145,31 @@ func mustGenerateTLSServerConf(t *testing.T, certManager *protocol.CertificateMa
 	}
 }
 
-func runSendReceiveTest(t *testing.T, sender protocol.Service, receiver protocol.Service) {
+type mockMessage string
+
+func (m mockMessage) MarshalBinary() (data []byte, err error) {
+	return []byte(m), nil
+}
+
+func runSendReceiveTest(t *testing.T, sender service.Service, receiver service.Service) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
-	receiver.ErrorHandler(protocol.ErrorHandlerFunc(func(ctx context.Context, err error) {
+	receiver.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
-	sender.ErrorHandler(protocol.ErrorHandlerFunc(func(ctx context.Context, err error) {
+	sender.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
 
-	receiver.InboundMessageHandler(protocol.ControlMessageHandlerFunc(func(ctx context.Context, message protocol.ControlMessage) {
+	receiver.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
 		wg.Done()
 	}))
 
-	require.NoError(t, sender.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, sender.SendAndWaitForAck(1, mockMessage("Funky!")))
 
 	wg.Wait()
 }

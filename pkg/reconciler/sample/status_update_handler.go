@@ -9,7 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"knative.dev/pkg/logging"
 
-	"knative.dev/control-data-plane-communication/pkg/control/message"
+	"knative.dev/control-data-plane-communication/pkg/control/samplesource"
 )
 
 // TODO might be good to generalize this
@@ -27,9 +27,9 @@ func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode 
 	logger := logging.FromContext(ctx)
 
 	switch opcode {
-	case message.StatusUpdateOpCode:
+	case samplesource.NotifyIntervalOpCode:
 		// We're good to go now, let's signal that and re-enqueue
-		var interval message.Duration
+		var interval samplesource.Duration
 		err := interval.UnmarshalBinary(payload)
 		if err != nil {
 			logger.Errorf("Cannot parse the set interval (sounds like a programming error of the adapter): %w", err)
@@ -44,16 +44,15 @@ func (sus *StatusUpdateStore) ControlMessageHandler(ctx context.Context, opcode 
 
 		// Trigger the reconciler again
 		sus.enqueueKey(srcName)
-	case message.ResumedOpCode:
-		sus.isActiveMutex.Lock()
-		sus.isActive[podIp] = true
-		sus.isActiveMutex.Unlock()
+	case samplesource.NotifyActiveStatusOpCode:
+		var status samplesource.ActiveStatus
+		err := status.UnmarshalBinary(payload)
+		if err != nil {
+			logger.Errorf("Cannot parse the status (sounds like a programming error of the adapter): %w", err)
+		}
 
-		// Trigger the reconciler again
-		sus.enqueueKey(srcName)
-	case message.StoppedOpCode:
 		sus.isActiveMutex.Lock()
-		sus.isActive[podIp] = false
+		sus.isActive[podIp] = bool(status)
 		sus.isActiveMutex.Unlock()
 
 		// Trigger the reconciler again

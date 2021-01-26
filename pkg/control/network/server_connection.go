@@ -1,4 +1,4 @@
-package protocol
+package network
 
 import (
 	"context"
@@ -9,6 +9,9 @@ import (
 	"time"
 
 	"knative.dev/pkg/logging"
+
+	ctrl "knative.dev/control-data-plane-communication/pkg/control"
+	"knative.dev/control-data-plane-communication/pkg/control/service"
 )
 
 const (
@@ -42,11 +45,11 @@ func LoadTLSConfig() (*tls.Config, error) {
 	return conf, nil
 }
 
-func StartInsecureControlServer(ctx context.Context) (Service, <-chan struct{}, error) {
+func StartInsecureControlServer(ctx context.Context) (service.Service, <-chan struct{}, error) {
 	return StartControlServer(ctx, nil)
 }
 
-func StartControlServer(ctx context.Context, tlsConf *tls.Config) (Service, <-chan struct{}, error) {
+func StartControlServer(ctx context.Context, tlsConf *tls.Config) (service.Service, <-chan struct{}, error) {
 	ln, err := listenConfig.Listen(ctx, "tcp", ":9000")
 	if err != nil {
 		return nil, nil, err
@@ -56,7 +59,7 @@ func StartControlServer(ctx context.Context, tlsConf *tls.Config) (Service, <-ch
 	}
 
 	tcpConn := newServerTcpConnection(ctx, ln)
-	ctrlService := newService(ctx, tcpConn)
+	ctrlService := service.NewService(ctx, tcpConn)
 
 	logging.FromContext(ctx).Infof("Started listener: %s", ln.Addr().String())
 
@@ -78,8 +81,8 @@ func newServerTcpConnection(ctx context.Context, listener net.Listener) *serverT
 		baseTcpConnection: baseTcpConnection{
 			ctx:                    ctx,
 			logger:                 logging.FromContext(ctx),
-			outboundMessageChannel: make(chan *OutboundMessage, 10),
-			inboundMessageChannel:  make(chan *InboundMessage, 10),
+			outboundMessageChannel: make(chan *ctrl.OutboundMessage, 10),
+			inboundMessageChannel:  make(chan *ctrl.InboundMessage, 10),
 			errors:                 make(chan error, 10),
 		},
 		listener: listener,

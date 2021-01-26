@@ -1,4 +1,4 @@
-package protocol
+package network
 
 import (
 	"context"
@@ -7,13 +7,16 @@ import (
 	"time"
 
 	"knative.dev/pkg/logging"
+
+	ctrl "knative.dev/control-data-plane-communication/pkg/control"
+	ctrlservice "knative.dev/control-data-plane-communication/pkg/control/service"
 )
 
 type Dialer interface {
 	DialContext(ctx context.Context, network, addr string) (net.Conn, error)
 }
 
-func StartControlClient(ctx context.Context, dialOptions Dialer, target string) (Service, error) {
+func StartControlClient(ctx context.Context, dialOptions Dialer, target string) (ctrlservice.Service, error) {
 	target = target + ":9000"
 	logging.FromContext(ctx).Infof("Starting control client to %s", target)
 
@@ -24,7 +27,7 @@ func StartControlClient(ctx context.Context, dialOptions Dialer, target string) 
 	}
 
 	tcpConn := newClientTcpConnection(ctx, dialOptions)
-	svc := newService(ctx, tcpConn)
+	svc := ctrlservice.NewService(ctx, tcpConn)
 
 	tcpConn.startPolling(conn)
 
@@ -60,8 +63,8 @@ func newClientTcpConnection(ctx context.Context, dialer Dialer) *clientTcpConnec
 		baseTcpConnection: baseTcpConnection{
 			ctx:                    ctx,
 			logger:                 logging.FromContext(ctx),
-			outboundMessageChannel: make(chan *OutboundMessage, 10),
-			inboundMessageChannel:  make(chan *InboundMessage, 10),
+			outboundMessageChannel: make(chan *ctrl.OutboundMessage, 10),
+			inboundMessageChannel:  make(chan *ctrl.InboundMessage, 10),
 			errors:                 make(chan error, 10),
 		},
 		dialer: dialer,

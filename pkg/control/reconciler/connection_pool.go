@@ -9,7 +9,8 @@ import (
 
 	"knative.dev/pkg/logging"
 
-	"knative.dev/control-data-plane-communication/pkg/control/protocol"
+	"knative.dev/control-data-plane-communication/pkg/control/network"
+	ctrlservice "knative.dev/control-data-plane-communication/pkg/control/service"
 )
 
 const (
@@ -17,24 +18,26 @@ const (
 )
 
 type ControlPlaneConnectionPool struct {
-	certificateManager *protocol.CertificateManager
+	certificateManager *network.CertificateManager
 	baseDialOptions    *net.Dialer
+
+	serviceWrapperFactories []ctrlservice.ServiceWrapper
 
 	connsLock sync.Mutex
 	conns     map[string]map[string]clientServiceHolder
 }
 
 type clientServiceHolder struct {
-	service  protocol.Service
+	service  ctrlservice.Service
 	cancelFn context.CancelFunc
 }
 
-func NewInsecureControlPlaneConnectionPool() *ControlPlaneConnectionPool {
-	return NewControlPlaneConnectionPool(nil)
+func NewInsecureControlPlaneConnectionPool(opts ...ControlPlaneConnectionPoolOption) *ControlPlaneConnectionPool {
+	return NewControlPlaneConnectionPool(nil, opts...)
 }
 
-func NewControlPlaneConnectionPool(certificateManager *protocol.CertificateManager) *ControlPlaneConnectionPool {
-	return &ControlPlaneConnectionPool{
+func NewControlPlaneConnectionPool(certificateManager *network.CertificateManager, opts ...ControlPlaneConnectionPoolOption) *ControlPlaneConnectionPool {
+	pool := &ControlPlaneConnectionPool{
 		certificateManager: certificateManager,
 		baseDialOptions: &net.Dialer{
 			KeepAlive: keepAlive,
@@ -42,6 +45,12 @@ func NewControlPlaneConnectionPool(certificateManager *protocol.CertificateManag
 		},
 		conns: make(map[string]map[string]clientServiceHolder),
 	}
+
+	for _, fn := range opts {
+		fn(pool)
+	}
+
+	return pool
 }
 
 func (cc *ControlPlaneConnectionPool) GetConnectedHosts(key string) []string {
@@ -59,7 +68,7 @@ func (cc *ControlPlaneConnectionPool) GetConnectedHosts(key string) []string {
 	return hosts
 }
 
-func (cc *ControlPlaneConnectionPool) GetServices(key string) map[string]protocol.Service {
+func (cc *ControlPlaneConnectionPool) GetServices(key string) map[string]ctrlservice.Service {
 	cc.connsLock.Lock()
 	defer cc.connsLock.Unlock()
 	var m map[string]clientServiceHolder
@@ -67,14 +76,14 @@ func (cc *ControlPlaneConnectionPool) GetServices(key string) map[string]protoco
 	if m, ok = cc.conns[key]; !ok {
 		return nil
 	}
-	svcs := make(map[string]protocol.Service, len(m))
+	svcs := make(map[string]ctrlservice.Service, len(m))
 	for k, h := range m {
 		svcs[k] = h.service
 	}
 	return svcs
 }
 
-func (cc *ControlPlaneConnectionPool) ResolveControlInterface(key string, host string) (string, protocol.Service) {
+func (cc *ControlPlaneConnectionPool) ResolveControlInterface(key string, host string) (string, ctrlservice.Service) {
 	cc.connsLock.Lock()
 	defer cc.connsLock.Unlock()
 	if m, ok := cc.conns[key]; !ok {
@@ -117,7 +126,7 @@ func (cc *ControlPlaneConnectionPool) RemoveAllConnections(ctx context.Context, 
 	delete(cc.conns, key)
 }
 
-func (cc *ControlPlaneConnectionPool) ReconcileConnections(ctx context.Context, key string, wantConnections []string, newServiceCb func(string, protocol.Service), oldServiceCb func(string)) (map[string]protocol.Service, error) {
+func (cc *ControlPlaneConnectionPool) ReconcileConnections(ctx context.Context, key string, wantConnections []string, newServiceCb func(string, ctrlservice.Service), oldServiceCb func(string)) (map[string]ctrlservice.Service, error) {
 	existingConnections := cc.GetConnectedHosts(key)
 
 	newConnections := setDifference(wantConnections, existingConnections)
@@ -153,8 +162,8 @@ func (cc *ControlPlaneConnectionPool) ReconcileConnections(ctx context.Context, 
 	return cc.GetServices(key), nil
 }
 
-func (cc *ControlPlaneConnectionPool) DialControlService(ctx context.Context, key string, host string) (string, protocol.Service, error) {
-	var dialer protocol.Dialer
+func (cc *ControlPlaneConnectionPool) DialControlService(ctx context.Context, key string, host string) (string, ctrlservice.Service, error) {
+	var dialer network.Dialer
 	dialer = cc.baseDialOptions
 	// Check if certificateManager is set up, otherwise connect without tls
 	if cc.certificateManager != nil {
@@ -168,10 +177,15 @@ func (cc *ControlPlaneConnectionPool) DialControlService(ctx context.Context, ke
 
 	// Need to start new conn
 	ctx, cancelFn := context.WithCancel(ctx)
-	newSvc, err := protocol.StartControlClient(ctx, dialer, host)
+	newSvc, err := network.StartControlClient(ctx, dialer, host)
 	if err != nil {
 		cancelFn()
 		return "", nil, err
+	}
+
+	// Apply wrappers
+	for _, wrap := range cc.serviceWrapperFactories {
+		newSvc = wrap(newSvc)
 	}
 
 	cc.connsLock.Lock()

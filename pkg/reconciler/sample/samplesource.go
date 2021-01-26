@@ -38,9 +38,10 @@ import (
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
-	"knative.dev/control-data-plane-communication/pkg/control/message"
-	"knative.dev/control-data-plane-communication/pkg/control/protocol"
+	ctrlnetwork "knative.dev/control-data-plane-communication/pkg/control/network"
 	ctrlreconciler "knative.dev/control-data-plane-communication/pkg/control/reconciler"
+	ctrlsamplesource "knative.dev/control-data-plane-communication/pkg/control/samplesource"
+	ctrlservice "knative.dev/control-data-plane-communication/pkg/control/service"
 	"knative.dev/control-data-plane-communication/pkg/reconciler"
 	"knative.dev/control-data-plane-communication/pkg/reconciler/sample/resources"
 )
@@ -53,18 +54,11 @@ type Reconciler struct {
 	sinkResolver   *resolver.URIResolver
 	configAccessor reconcilersource.ConfigAccessor
 
-	certificateManager *protocol.CertificateManager
+	certificateManager *ctrlnetwork.CertificateManager
 	controlConnections *ctrlreconciler.ControlPlaneConnectionPool
 
-	keyPairs      map[types.NamespacedName]*protocol.KeyPair
+	keyPairs      map[types.NamespacedName]*ctrlnetwork.KeyPair
 	keyPairsMutex sync.Mutex
-
-	// TODO abstract this
-	lastSentStateIsActive map[string]bool
-	lastSentStateMutex    sync.Mutex
-	// TODO abstract this
-	lastIntervalUpdateSent     map[string]time.Duration
-	lastIntervalUpdateSentLock sync.Mutex
 
 	statusUpdateStore *StatusUpdateStore
 }
@@ -83,7 +77,7 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		Name:      resources.MakeReceiveAdapterDeploymentName(src),
 		Namespace: src.Namespace,
 	}
-	var dataPlaneKeyPair *protocol.KeyPair
+	var dataPlaneKeyPair *ctrlnetwork.KeyPair
 	if dataPlaneKeyPair, _ = r.getKeyPair(raNamespacedName); dataPlaneKeyPair == nil {
 		var err error
 		dataPlaneKeyPair, err = r.certificateManager.EmitNewDataPlaneCertificate(ctx)
@@ -168,9 +162,9 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		ctx,
 		string(src.UID),
 		[]string{raPodIp},
-		func(s string, service protocol.Service) {
+		func(s string, service ctrlservice.Service) {
 			srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}
-			service.InboundMessageHandler(protocol.ControlMessageHandlerFunc(func(ctx context.Context, message protocol.ControlMessage) {
+			service.InboundMessageHandler(ctrlservice.ControlMessageHandlerFunc(func(ctx context.Context, message ctrlservice.ControlMessage) {
 				message.Ack()
 				r.statusUpdateStore.ControlMessageHandler(ctx, message.Headers().OpCode(), message.Payload(), s, srcNamespacedName)
 			}))
@@ -187,17 +181,10 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 	// TODO lionel add your fancy MT scheduler here!
 
-	// --- If last configuration update to that deployment doesn't contain the interval, set it
 	actualInterval, _ := time.ParseDuration(src.Spec.Interval) // No need to check the error here, the webhook already did it
-	if old, ok := r.getLastSentInterval(connectedIp); !ok || old != actualInterval {
-		err := ctrl.SendAndWaitForAck(message.UpdateIntervalOpCode, message.Duration(actualInterval))
-		if err != nil {
-			return fmt.Errorf("cannot send the event to the pod: %w", err)
-		}
-
-		r.lastIntervalUpdateSentLock.Lock()
-		r.lastIntervalUpdateSent[connectedIp] = actualInterval
-		r.lastIntervalUpdateSentLock.Unlock()
+	err = ctrl.SendAndWaitForAck(ctrlsamplesource.UpdateIntervalOpCode, ctrlsamplesource.Duration(actualInterval))
+	if err != nil {
+		return fmt.Errorf("cannot send the event to the pod: %w", err)
 	}
 
 	logger.Infof("we have sent the interval update")
@@ -221,13 +208,9 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		logger.Infof("Reconciling active status")
 
 		// Reconcile active
-		if sentResumeSignal, ok := r.getLastSentSignal(connectedIp); !ok || !sentResumeSignal {
-			err := ctrl.SendSignalAndWaitForAck(message.ResumeOpCode)
-			if err != nil {
-				return fmt.Errorf("cannot send the event to the pod: %w", err)
-			}
-
-			r.setLastSentSignal(connectedIp, true)
+		err := ctrl.SendAndWaitForAck(ctrlsamplesource.UpdateActiveStatusOpCode, ctrlsamplesource.ActiveStatus(true))
+		if err != nil {
+			return fmt.Errorf("cannot send the event to the pod: %w", err)
 		}
 		src.Status.MarkResuming()
 		logger.Infof("Sent resume command")
@@ -243,13 +226,9 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		logger.Infof("Reconciling stop status")
 
 		// Reconcile stop
-		if sentResumeSignal, ok := r.getLastSentSignal(connectedIp); !ok || sentResumeSignal {
-			err := ctrl.SendSignalAndWaitForAck(message.StopOpCode)
-			if err != nil {
-				return fmt.Errorf("cannot send the event to the pod: %w", err)
-			}
-
-			r.setLastSentSignal(connectedIp, false)
+		err := ctrl.SendAndWaitForAck(ctrlsamplesource.UpdateActiveStatusOpCode, ctrlsamplesource.ActiveStatus(false))
+		if err != nil {
+			return fmt.Errorf("cannot send the event to the pod: %w", err)
 		}
 		src.Status.MarkPausing()
 		logger.Infof("Sent stop command")
@@ -273,31 +252,11 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSourc
 	return nil
 }
 
-func (r *Reconciler) getKeyPair(name types.NamespacedName) (*protocol.KeyPair, bool) {
+func (r *Reconciler) getKeyPair(name types.NamespacedName) (*ctrlnetwork.KeyPair, bool) {
 	r.keyPairsMutex.Lock()
 	defer r.keyPairsMutex.Unlock()
 	kp, ok := r.keyPairs[name]
 	return kp, ok
-}
-
-func (r *Reconciler) getLastSentInterval(podIp string) (time.Duration, bool) {
-	r.lastIntervalUpdateSentLock.Lock()
-	defer r.lastIntervalUpdateSentLock.Unlock()
-	t, ok := r.lastIntervalUpdateSent[podIp]
-	return t, ok
-}
-
-func (r *Reconciler) setLastSentSignal(podIp string, active bool) {
-	r.lastSentStateMutex.Lock()
-	r.lastSentStateIsActive[podIp] = active
-	defer r.lastSentStateMutex.Unlock()
-}
-
-func (r *Reconciler) getLastSentSignal(podIp string) (bool, bool) {
-	r.lastSentStateMutex.Lock()
-	defer r.lastSentStateMutex.Unlock()
-	b, ok := r.lastSentStateIsActive[podIp]
-	return b, ok
 }
 
 func makeSinkBinding(src *v1alpha1.SampleSource) *sourcesv1.SinkBinding {

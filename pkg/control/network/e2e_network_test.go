@@ -1,4 +1,4 @@
-package protocol
+package network
 
 import (
 	"context"
@@ -13,7 +13,15 @@ import (
 	"go.uber.org/atomic"
 	"go.uber.org/zap"
 	"knative.dev/pkg/logging"
+
+	"knative.dev/control-data-plane-communication/pkg/control/service"
 )
+
+type mockMessage string
+
+func (m mockMessage) MarshalBinary() (data []byte, err error) {
+	return []byte(m), nil
+}
 
 func TestTLSConf(t *testing.T) {
 	serverTLSConf, clientTLSDialer := testTLSConf(t, context.TODO())
@@ -37,7 +45,7 @@ func TestClientToServer(t *testing.T) {
 
 func TestNoopMessageHandlerAcks(t *testing.T) {
 	_, server, _, _ := mustSetupWithTLS(t)
-	require.NoError(t, server.SendSignalAndWaitForAck(10))
+	require.NoError(t, server.SendAndWaitForAck(10, mockMessage("Funky!")))
 }
 
 func TestInsecureServerToClient(t *testing.T) {
@@ -56,37 +64,37 @@ func TestServerToClientAndBack(t *testing.T) {
 	wg := sync.WaitGroup{}
 	wg.Add(6)
 
-	server.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	server.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
-	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	client.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
 
-	server.InboundMessageHandler(ControlMessageHandlerFunc(func(ctx context.Context, message ControlMessage) {
+	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(2), message.Headers().OpCode())
 		require.Equal(t, "Funky2!", string(message.Payload()))
 		message.Ack()
 		wg.Done()
 	}))
-	client.InboundMessageHandler(ControlMessageHandlerFunc(func(ctx context.Context, message ControlMessage) {
+	client.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
 		wg.Done()
 	}))
 
-	require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
-	require.NoError(t, client.SendBinaryAndWaitForAck(2, []byte("Funky2!")))
-	require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
-	require.NoError(t, client.SendBinaryAndWaitForAck(2, []byte("Funky2!")))
-	require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
-	require.NoError(t, client.SendBinaryAndWaitForAck(2, []byte("Funky2!")))
+	require.NoError(t, server.SendAndWaitForAck(1, mockMessage("Funky!")))
+	require.NoError(t, client.SendAndWaitForAck(2, mockMessage("Funky2!")))
+	require.NoError(t, server.SendAndWaitForAck(1, mockMessage("Funky!")))
+	require.NoError(t, client.SendAndWaitForAck(2, mockMessage("Funky2!")))
+	require.NoError(t, server.SendAndWaitForAck(1, mockMessage("Funky!")))
+	require.NoError(t, client.SendAndWaitForAck(2, mockMessage("Funky2!")))
 
 	wg.Wait()
 }
 
-func TestE2EClientToServerWithClientStop(t *testing.T) {
+func TestClientToServerWithClientStop(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 	serverTLSConf, clientTLSDialer := testTLSConf(t, ctx)
@@ -106,17 +114,17 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 	client, err := StartControlClient(clientCtx, clientTLSDialer, "localhost")
 	require.NoError(t, err)
 
-	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	client.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
 
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 
-	server.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	server.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
-	server.InboundMessageHandler(ControlMessageHandlerFunc(func(ctx context.Context, message ControlMessage) {
+	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
@@ -125,7 +133,7 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 
 	// Send a message, close the client, restart it and send another message
 
-	require.NoError(t, client.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendAndWaitForAck(1, mockMessage("Funky!")))
 
 	clientCancelFn()
 
@@ -136,16 +144,16 @@ func TestE2EClientToServerWithClientStop(t *testing.T) {
 	client2, err := StartControlClient(clientCtx2, clientTLSDialer, "localhost")
 	require.NoError(t, err)
 
-	client2.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	client2.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
 
-	require.NoError(t, client2.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client2.SendAndWaitForAck(1, mockMessage("Funky!")))
 
 	wg.Wait()
 }
 
-func TestE2EClientToServerWithServerStop(t *testing.T) {
+func TestClientToServerWithServerStop(t *testing.T) {
 	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 	serverTLSConf, clientTLSDialer := testTLSConf(t, ctx)
@@ -161,17 +169,17 @@ func TestE2EClientToServerWithServerStop(t *testing.T) {
 	client, err := StartControlClient(clientCtx, clientTLSDialer, "localhost")
 	require.NoError(t, err)
 
-	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	client.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
 
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	server.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	server.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
-	server.InboundMessageHandler(ControlMessageHandlerFunc(func(ctx context.Context, message ControlMessage) {
+	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
@@ -180,7 +188,7 @@ func TestE2EClientToServerWithServerStop(t *testing.T) {
 
 	// Send a message, close the server, restart it and send another message
 
-	require.NoError(t, client.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendAndWaitForAck(1, mockMessage("Funky!")))
 
 	serverCancelFn()
 
@@ -194,17 +202,17 @@ func TestE2EClientToServerWithServerStop(t *testing.T) {
 		<-closedServerSignal
 	})
 
-	server2.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	server2.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
-	server2.InboundMessageHandler(ControlMessageHandlerFunc(func(ctx context.Context, message ControlMessage) {
+	server2.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
 		wg.Done()
 	}))
 
-	require.NoError(t, client.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, client.SendAndWaitForAck(1, mockMessage("Funky!")))
 
 	wg.Wait()
 }
@@ -215,23 +223,23 @@ func TestManyMessages(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1000 * 2)
 
-	server.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	server.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
-	client.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	client.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
 
 	processed := atomic.NewInt32(0)
 
-	server.InboundMessageHandler(ControlMessageHandlerFunc(func(ctx context.Context, message ControlMessage) {
+	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(2), message.Headers().OpCode())
 		require.Equal(t, "Funky2!", string(message.Payload()))
 		message.Ack()
 		wg.Done()
 		processed.Inc()
 	}))
-	client.InboundMessageHandler(ControlMessageHandlerFunc(func(ctx context.Context, message ControlMessage) {
+	client.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
@@ -242,12 +250,12 @@ func TestManyMessages(t *testing.T) {
 	for i := 0; i < 1000; i++ {
 		if i%2 == 0 {
 			go func() {
-				require.NoError(t, server.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+				require.NoError(t, server.SendAndWaitForAck(1, mockMessage("Funky!")))
 				wg.Done()
 			}()
 		} else {
 			go func() {
-				require.NoError(t, client.SendBinaryAndWaitForAck(2, []byte("Funky2!")))
+				require.NoError(t, client.SendAndWaitForAck(2, mockMessage("Funky2!")))
 				wg.Done()
 			}()
 		}
@@ -289,7 +297,7 @@ func testTLSConf(t *testing.T, ctx context.Context) (*tls.Config, *tls.Dialer) {
 	return serverTLSConf, tlsDialer
 }
 
-func mustSetupWithTLS(t *testing.T) (serverCtx context.Context, server Service, clientCtx context.Context, client Service) {
+func mustSetupWithTLS(t *testing.T) (serverCtx context.Context, server service.Service, clientCtx context.Context, client service.Service) {
 	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 	serverTLSConf, clientTLSDialer := testTLSConf(t, ctx)
@@ -311,7 +319,7 @@ func mustSetupWithTLS(t *testing.T) (serverCtx context.Context, server Service, 
 	return serverCtx, server, clientCtx, client
 }
 
-func mustSetupInsecure(t *testing.T) (serverCtx context.Context, server Service, clientCtx context.Context, client Service) {
+func mustSetupInsecure(t *testing.T) (serverCtx context.Context, server service.Service, clientCtx context.Context, client service.Service) {
 	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 
@@ -335,25 +343,25 @@ func mustSetupInsecure(t *testing.T) (serverCtx context.Context, server Service,
 	return serverCtx, server, clientCtx, client
 }
 
-func runSendReceiveTest(t *testing.T, sender Service, receiver Service) {
+func runSendReceiveTest(t *testing.T, sender service.Service, receiver service.Service) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
-	receiver.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	receiver.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
-	sender.ErrorHandler(ErrorHandlerFunc(func(ctx context.Context, err error) {
+	sender.ErrorHandler(service.ErrorHandlerFunc(func(ctx context.Context, err error) {
 		require.NoError(t, err)
 	}))
 
-	receiver.InboundMessageHandler(ControlMessageHandlerFunc(func(ctx context.Context, message ControlMessage) {
+	receiver.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
 		wg.Done()
 	}))
 
-	require.NoError(t, sender.SendBinaryAndWaitForAck(1, []byte("Funky!")))
+	require.NoError(t, sender.SendAndWaitForAck(1, mockMessage("Funky!")))
 
 	wg.Wait()
 }
