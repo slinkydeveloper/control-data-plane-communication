@@ -54,7 +54,7 @@ func (c ErrorHandlerFunc) HandleServiceError(ctx context.Context, err error) {
 }
 
 var LoggerErrorHandler ErrorHandlerFunc = func(ctx context.Context, err error) {
-	logging.FromContext(ctx).Warnf("Error from the connection: %s", err)
+	logging.FromContext(ctx).Debugf("Error from the connection: %s", err)
 }
 
 // Service is the high level interface that handles send with retries and acks
@@ -164,16 +164,12 @@ func (c *service) startPolling() {
 					logging.FromContext(c.ctx).Debugf("InboundMessages channel closed, closing the polling")
 					return
 				}
-				go func() {
-					c.accept(msg)
-				}()
+				go c.accept(msg)
 			case err, ok := <-c.connection.Errors():
 				if !ok {
 					logging.FromContext(c.ctx).Debugf("Errors channel closed")
 				}
-				go func() {
-					c.acceptError(err)
-				}()
+				go c.acceptError(err)
 			case <-c.ctx.Done():
 				logging.FromContext(c.ctx).Debugf("Context closed, closing polling loop of control service")
 				return
