@@ -1,4 +1,4 @@
-package reconciler
+package service
 
 import (
 	"context"
@@ -8,11 +8,11 @@ import (
 
 	"knative.dev/pkg/logging"
 
-	ctrlservice "knative.dev/control-data-plane-communication/pkg/control/service"
+	"knative.dev/control-data-plane-communication/pkg/control"
 )
 
 type cachingService struct {
-	ctrlservice.Service
+	control.Service
 
 	ctx context.Context
 
@@ -20,12 +20,12 @@ type cachingService struct {
 	sentMessages     map[uint8]interface{}
 }
 
-var _ ctrlservice.Service = (*cachingService)(nil)
+var _ control.Service = (*cachingService)(nil)
 
 // WithCachingService will cache last message sent for each opcode and, in case you try to send a message again with the same opcode and payload, the message
 // won't be sent again
-func WithCachingService(ctx context.Context) ctrlservice.ServiceWrapper {
-	return func(service ctrlservice.Service) ctrlservice.Service {
+func WithCachingService(ctx context.Context) control.ServiceWrapper {
+	return func(service control.Service) control.Service {
 		return &cachingService{
 			Service:      service,
 			ctx:          ctx,

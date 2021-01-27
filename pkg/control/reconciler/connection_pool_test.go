@@ -12,6 +12,7 @@ import (
 	"go.uber.org/zap"
 	"knative.dev/pkg/logging"
 
+	"knative.dev/control-data-plane-communication/pkg/control"
 	"knative.dev/control-data-plane-communication/pkg/control/network"
 	"knative.dev/control-data-plane-communication/pkg/control/service"
 )
@@ -43,9 +44,9 @@ func mockValueMerger(old interface{}, new interface{}) interface{} {
 	return &merged
 }
 
-var serverConnectionPoolSetupTestCases = map[string]func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool){
+var serverConnectionPoolSetupTestCases = map[string]func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (control.Service, *ControlPlaneConnectionPool){
 	"InsecureConnectionPool": setupInsecureServerAndConnectionPool,
-	"TLSConnectionPool": func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool) {
+	"TLSConnectionPool": func(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (control.Service, *ControlPlaneConnectionPool) {
 		serverCtx, serverCancelFn := context.WithCancel(ctx)
 
 		certManager, err := network.NewCertificateManager(ctx)
@@ -78,7 +79,7 @@ func TestReconcileConnections(t *testing.T) {
 			newServiceInvokedCounter := atomic.NewInt32(0)
 			oldServiceInvokedCounter := atomic.NewInt32(0)
 
-			conns, err := connectionPool.ReconcileConnections(context.TODO(), "hello", []string{"127.0.0.1"}, func(string, service.Service) {
+			conns, err := connectionPool.ReconcileConnections(context.TODO(), "hello", []string{"127.0.0.1"}, func(string, control.Service) {
 				newServiceInvokedCounter.Inc()
 			}, func(string) {
 				oldServiceInvokedCounter.Inc()
@@ -93,7 +94,7 @@ func TestReconcileConnections(t *testing.T) {
 			newServiceInvokedCounter.Store(0)
 			oldServiceInvokedCounter.Store(0)
 
-			conns, err = connectionPool.ReconcileConnections(context.TODO(), "hello", []string{}, func(string, service.Service) {
+			conns, err = connectionPool.ReconcileConnections(context.TODO(), "hello", []string{}, func(string, control.Service) {
 				newServiceInvokedCounter.Inc()
 			}, func(string) {
 				oldServiceInvokedCounter.Inc()
@@ -112,7 +113,7 @@ func TestCachingWrapper(t *testing.T) {
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 	for name, setupFn := range serverConnectionPoolSetupTestCases {
 		t.Run(name, func(t *testing.T) {
-			dataPlane, connectionPool := setupFn(t, ctx, WithServiceWrapper(WithCachingService(ctx)))
+			dataPlane, connectionPool := setupFn(t, ctx, WithServiceWrapper(service.WithCachingService(ctx)))
 
 			conns, err := connectionPool.ReconcileConnections(context.TODO(), "hello", []string{"127.0.0.1"}, nil, nil)
 			require.NoError(t, err)
@@ -122,7 +123,7 @@ func TestCachingWrapper(t *testing.T) {
 
 			messageReceivedCounter := atomic.NewInt32(0)
 
-			dataPlane.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+			dataPlane.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 				require.Equal(t, uint8(1), message.Headers().OpCode())
 				require.Equal(t, "Funky!", string(message.Payload()))
 				message.Ack()
@@ -155,11 +156,11 @@ func mustGenerateTLSServerConf(t *testing.T, certManager *network.CertificateMan
 	}
 }
 
-func runSendReceiveTest(t *testing.T, sender service.Service, receiver service.Service) {
+func runSendReceiveTest(t *testing.T, sender control.Service, receiver control.Service) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
-	receiver.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	receiver.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
@@ -171,7 +172,7 @@ func runSendReceiveTest(t *testing.T, sender service.Service, receiver service.S
 	wg.Wait()
 }
 
-func setupInsecureServerAndConnectionPool(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (service.Service, *ControlPlaneConnectionPool) {
+func setupInsecureServerAndConnectionPool(t *testing.T, ctx context.Context, opts ...ControlPlaneConnectionPoolOption) (control.Service, *ControlPlaneConnectionPool) {
 	serverCtx, serverCancelFn := context.WithCancel(ctx)
 
 	server, closedServerSignal, err := network.StartInsecureControlServer(serverCtx)
