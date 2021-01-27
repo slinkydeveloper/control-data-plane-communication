@@ -14,7 +14,7 @@ import (
 	"go.uber.org/zap"
 	"knative.dev/pkg/logging"
 
-	"knative.dev/control-data-plane-communication/pkg/control/service"
+	"knative.dev/control-data-plane-communication/pkg/control"
 )
 
 type mockMessage string
@@ -64,13 +64,13 @@ func TestServerToClientAndBack(t *testing.T) {
 	wg := sync.WaitGroup{}
 	wg.Add(6)
 
-	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	server.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 		require.Equal(t, uint8(2), message.Headers().OpCode())
 		require.Equal(t, "Funky2!", string(message.Payload()))
 		message.Ack()
 		wg.Done()
 	}))
-	client.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	client.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
@@ -110,7 +110,7 @@ func TestClientToServerWithClientStop(t *testing.T) {
 	wg := sync.WaitGroup{}
 	wg.Add(2)
 
-	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	server.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
@@ -154,7 +154,7 @@ func TestClientToServerWithServerStop(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(2)
 
-	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	server.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
@@ -177,7 +177,7 @@ func TestClientToServerWithServerStop(t *testing.T) {
 		<-closedServerSignal
 	})
 
-	server2.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	server2.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
@@ -197,14 +197,14 @@ func TestManyMessages(t *testing.T) {
 
 	processed := atomic.NewInt32(0)
 
-	server.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	server.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 		require.Equal(t, uint8(2), message.Headers().OpCode())
 		require.Equal(t, "Funky2!", string(message.Payload()))
 		message.Ack()
 		wg.Done()
 		processed.Inc()
 	}))
-	client.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	client.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()
@@ -262,7 +262,7 @@ func testTLSConf(t *testing.T, ctx context.Context) (*tls.Config, *tls.Dialer) {
 	return serverTLSConf, tlsDialer
 }
 
-func mustSetupWithTLS(t *testing.T) (serverCtx context.Context, server service.Service, clientCtx context.Context, client service.Service) {
+func mustSetupWithTLS(t *testing.T) (serverCtx context.Context, server control.Service, clientCtx context.Context, client control.Service) {
 	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 	serverTLSConf, clientTLSDialer := testTLSConf(t, ctx)
@@ -284,7 +284,7 @@ func mustSetupWithTLS(t *testing.T) (serverCtx context.Context, server service.S
 	return serverCtx, server, clientCtx, client
 }
 
-func mustSetupInsecure(t *testing.T) (serverCtx context.Context, server service.Service, clientCtx context.Context, client service.Service) {
+func mustSetupInsecure(t *testing.T) (serverCtx context.Context, server control.Service, clientCtx context.Context, client control.Service) {
 	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 
@@ -308,11 +308,11 @@ func mustSetupInsecure(t *testing.T) (serverCtx context.Context, server service.
 	return serverCtx, server, clientCtx, client
 }
 
-func runSendReceiveTest(t *testing.T, sender service.Service, receiver service.Service) {
+func runSendReceiveTest(t *testing.T, sender control.Service, receiver control.Service) {
 	wg := sync.WaitGroup{}
 	wg.Add(1)
 
-	receiver.InboundMessageHandler(service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	receiver.MessageHandler(control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 		require.Equal(t, uint8(1), message.Headers().OpCode())
 		require.Equal(t, "Funky!", string(message.Payload()))
 		message.Ack()

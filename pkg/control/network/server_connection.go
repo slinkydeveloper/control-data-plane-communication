@@ -45,11 +45,11 @@ func LoadServerTLSConfig() (*tls.Config, error) {
 	return conf, nil
 }
 
-func StartInsecureControlServer(ctx context.Context) (service.Service, <-chan struct{}, error) {
+func StartInsecureControlServer(ctx context.Context) (ctrl.Service, <-chan struct{}, error) {
 	return StartControlServer(ctx, nil)
 }
 
-func StartControlServer(ctx context.Context, tlsConf *tls.Config) (service.Service, <-chan struct{}, error) {
+func StartControlServer(ctx context.Context, tlsConf *tls.Config) (ctrl.Service, <-chan struct{}, error) {
 	ln, err := listenConfig.Listen(ctx, "tcp", ":9000")
 	if err != nil {
 		return nil, nil, err

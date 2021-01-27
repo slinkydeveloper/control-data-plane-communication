@@ -29,6 +29,7 @@ import (
 	"knative.dev/control-data-plane-communication/pkg/control/network"
 	ctrlreconciler "knative.dev/control-data-plane-communication/pkg/control/reconciler"
 	ctrlsamplesource "knative.dev/control-data-plane-communication/pkg/control/samplesource"
+	ctrlservice "knative.dev/control-data-plane-communication/pkg/control/service"
 
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
@@ -66,7 +67,7 @@ func NewController(
 		certificateManager: certManager,
 		controlConnections: ctrlreconciler.NewControlPlaneConnectionPool(
 			certManager,
-			ctrlreconciler.WithServiceWrapper(ctrlreconciler.WithCachingService(ctx)),
+			ctrlreconciler.WithServiceWrapper(ctrlservice.WithCachingService(ctx)),
 		),
 
 		keyPairs: make(map[types.NamespacedName]*network.KeyPair),
@@ -78,8 +79,8 @@ func NewController(
 	impl := samplesource.NewImpl(ctx, r)
 
 	r.sinkResolver = resolver.NewURIResolver(ctx, impl.EnqueueKey)
-	r.intervalNotificationsStore = ctrlreconciler.NewNotificationStore(impl.EnqueueKey, ctrlsamplesource.DurationParser, ctrlreconciler.PassNewValue)
-	r.activeStatusNotificationsStore = ctrlreconciler.NewNotificationStore(impl.EnqueueKey, ctrlsamplesource.ActiveStatusParser, ctrlreconciler.PassNewValue)
+	r.intervalNotificationsStore = ctrlreconciler.NewNotificationStore(impl.EnqueueKey, ctrlsamplesource.DurationParser)
+	r.activeStatusNotificationsStore = ctrlreconciler.NewNotificationStore(impl.EnqueueKey, ctrlsamplesource.ActiveStatusParser)
 
 	logging.FromContext(ctx).Info("Setting up event handlers")
 

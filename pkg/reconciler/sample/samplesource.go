@@ -38,6 +38,7 @@ import (
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
+	"knative.dev/control-data-plane-communication/pkg/control"
 	ctrlnetwork "knative.dev/control-data-plane-communication/pkg/control/network"
 	ctrlreconciler "knative.dev/control-data-plane-communication/pkg/control/reconciler"
 	ctrlsamplesource "knative.dev/control-data-plane-communication/pkg/control/samplesource"
@@ -164,10 +165,10 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		ctx,
 		string(src.UID),
 		[]string{raPodIp},
-		func(podIp string, service ctrlservice.Service) {
-			service.InboundMessageHandler(ctrlreconciler.NewMessageRouter(map[uint8]ctrlservice.ControlMessageHandler{
-				ctrlsamplesource.NotifyIntervalOpCode:     r.intervalNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp),
-				ctrlsamplesource.NotifyActiveStatusOpCode: r.activeStatusNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp),
+		func(podIp string, service control.Service) {
+			service.MessageHandler(ctrlservice.NewMessageRouter(map[uint8]control.MessageHandler{
+				ctrlsamplesource.NotifyIntervalOpCode:     r.intervalNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp, ctrlreconciler.PassNewValue),
+				ctrlsamplesource.NotifyActiveStatusOpCode: r.activeStatusNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp, ctrlreconciler.PassNewValue),
 			}))
 		},
 		func(podIp string) {

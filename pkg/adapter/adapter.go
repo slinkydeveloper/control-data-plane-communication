@@ -26,9 +26,10 @@ import (
 	"knative.dev/eventing/pkg/adapter/v2"
 	"knative.dev/pkg/logging"
 
+	"knative.dev/control-data-plane-communication/pkg/control"
 	"knative.dev/control-data-plane-communication/pkg/control/network"
 	"knative.dev/control-data-plane-communication/pkg/control/samplesource"
-	"knative.dev/control-data-plane-communication/pkg/control/service"
+	ctrlservice "knative.dev/control-data-plane-communication/pkg/control/service"
 )
 
 type envConfig struct {
@@ -55,7 +56,7 @@ type Adapter struct {
 
 	nextID int
 
-	controlServer service.Service
+	controlServer control.Service
 
 	stateMutex       sync.Mutex
 	state            State
@@ -82,56 +83,48 @@ func (a *Adapter) newEvent() cloudevents.Event {
 	return event
 }
 
-func (a *Adapter) HandleControlMessage(ctx context.Context, msg service.ControlMessage) {
-	a.logger.Debugf("Received control message")
-
+func (a *Adapter) HandleUpdateInterval(ctx context.Context, msg control.ServiceMessage) {
+	var interval samplesource.Duration
+	err := interval.UnmarshalBinary(msg.Payload())
+	if err != nil {
+		a.logger.Errorf("Cannot parse the new interval. This should not happen, some controller bug?: %v", err)
+	}
 	msg.Ack()
 
-	switch msg.Headers().OpCode() {
-	case samplesource.UpdateIntervalOpCode:
-		var interval samplesource.Duration
-		err := interval.UnmarshalBinary(msg.Payload())
-		if err != nil {
-			a.logger.Errorf("Cannot parse the new interval. This should not happen, some controller bug?: %v", err)
-		}
+	a.intervalMutex.Lock()
+	a.interval = time.Duration(interval)
+	a.logger.Infof("Interval set %v", a.interval)
+	a.intervalMutex.Unlock()
 
-		a.intervalMutex.Lock()
-		a.interval = time.Duration(interval)
-		a.logger.Infof("Interval set %v", a.interval)
-		a.intervalMutex.Unlock()
+	err = a.controlServer.SendAndWaitForAck(samplesource.NotifyIntervalOpCode, interval)
+	if err != nil {
+		a.logger.Errorf("Something is broken in the update event: %v", err)
+	}
+}
 
-		err = a.controlServer.SendAndWaitForAck(samplesource.NotifyIntervalOpCode, interval)
-		if err != nil {
-			a.logger.Errorf("Something is broken in the update event: %v", err)
+func (a *Adapter) HandleUpdateActiveStatus(ctx context.Context, msg control.ServiceMessage) {
+	var active samplesource.ActiveStatus
+	err := active.UnmarshalBinary(msg.Payload())
+	if err != nil {
+		a.logger.Errorf("Cannot unmarshal the active status. This should not happen, some controller bug?: %v", err)
+	}
+	msg.Ack()
+
+	if active.IsRunning() {
+		a.logger.Debugf("Received resume signal")
+		a.stateMutex.Lock()
+		if a.state == Stopped {
+			a.closeRunningPing = a.startPingGoroutine(ctx)
+			a.state = Running
 		}
-	case samplesource.UpdateActiveStatusOpCode:
-		var active samplesource.ActiveStatus
-		err := active.UnmarshalBinary(msg.Payload())
-		if err != nil {
-			a.logger.Errorf("Cannot unmarshal the active status. This should not happen, some controller bug?: %v", err)
+		a.stateMutex.Unlock()
+	} else {
+		a.logger.Debugf("Received stop signal")
+		a.stateMutex.Lock()
+		if a.state == Running {
+			a.closeRunningPing()
 		}
-		if active.IsRunning() {
-			a.logger.Debugf("Received resume signal")
-			a.stateMutex.Lock()
-			if a.state == Stopped {
-				a.closeRunningPing = a.startPingGoroutine(ctx)
-				a.state = Running
-			}
-			a.stateMutex.Unlock()
-		} else {
-			a.logger.Debugf("Received stop signal")
-			a.stateMutex.Lock()
-			if a.state == Running {
-				a.closeRunningPing()
-			}
-			a.stateMutex.Unlock()
-		}
-	default:
-		a.logger.Warnw(
-			"Received an unknown message, I don't know what to do with it",
-			zap.Uint8("opcode", msg.Headers().OpCode()),
-			zap.ByteString("payload", msg.Payload()),
-		)
+		a.stateMutex.Unlock()
 	}
 }
 
@@ -149,9 +142,12 @@ func (a *Adapter) Start(ctx context.Context) error {
 		return err
 	}
 	a.logger.Info("Control server started")
-	a.logger.Infof("Waiting for the first interval to set")
+	a.logger.Infof("Waiting for the first interval to be set")
 
-	a.controlServer.InboundMessageHandler(a)
+	a.controlServer.MessageHandler(ctrlservice.NewMessageRouter(map[uint8]control.MessageHandler{
+		samplesource.UpdateIntervalOpCode:     control.MessageHandlerFunc(a.HandleUpdateInterval),
+		samplesource.UpdateActiveStatusOpCode: control.MessageHandlerFunc(a.HandleUpdateActiveStatus),
+	}))
 
 	<-ctx.Done()
 	return nil

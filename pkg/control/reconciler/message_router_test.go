@@ -9,10 +9,11 @@ import (
 	"go.uber.org/zap"
 	"knative.dev/pkg/logging"
 
+	"knative.dev/control-data-plane-communication/pkg/control"
 	"knative.dev/control-data-plane-communication/pkg/control/service"
 )
 
-func setupConnection(t *testing.T) (service.Service, service.Service) {
+func setupConnection(t *testing.T) (control.Service, control.Service) {
 	logger, _ := zap.NewDevelopment()
 	ctx := logging.WithLogger(context.TODO(), logger.Sugar())
 
@@ -36,14 +37,14 @@ func TestMessageRouter(t *testing.T) {
 	opcode1Count := atomic.NewInt32(0)
 	opcode2Count := atomic.NewInt32(0)
 
-	dataPlane.InboundMessageHandler(NewMessageRouter(map[uint8]service.ControlMessageHandler{
-		1: service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	dataPlane.MessageHandler(service.NewMessageRouter(map[uint8]control.MessageHandler{
+		1: control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 			require.Equal(t, uint8(1), message.Headers().OpCode())
 			require.Equal(t, "Funky!", string(message.Payload()))
 			message.Ack()
 			opcode1Count.Inc()
 		}),
-		2: service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+		2: control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 			require.Equal(t, uint8(2), message.Headers().OpCode())
 			require.Equal(t, "Funky!", string(message.Payload()))
 			message.Ack()
@@ -65,14 +66,14 @@ func TestMessageRouter_MessageNotMatchingAck(t *testing.T) {
 	opcode1Count := atomic.NewInt32(0)
 	opcode2Count := atomic.NewInt32(0)
 
-	dataPlane.InboundMessageHandler(NewMessageRouter(map[uint8]service.ControlMessageHandler{
-		1: service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+	dataPlane.MessageHandler(service.NewMessageRouter(map[uint8]control.MessageHandler{
+		1: control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 			require.Equal(t, uint8(1), message.Headers().OpCode())
 			require.Equal(t, "Funky!", string(message.Payload()))
 			message.Ack()
 			opcode1Count.Inc()
 		}),
-		2: service.ControlMessageHandlerFunc(func(ctx context.Context, message service.ControlMessage) {
+		2: control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 			require.Equal(t, uint8(2), message.Headers().OpCode())
 			require.Equal(t, "Funky!", string(message.Payload()))
 			message.Ack()
