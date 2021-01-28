@@ -144,10 +144,10 @@ func (a *Adapter) Start(ctx context.Context) error {
 	a.logger.Info("Control server started")
 	a.logger.Infof("Waiting for the first interval to be set")
 
-	a.controlServer.MessageHandler(ctrlservice.NewMessageRouter(map[uint8]control.MessageHandler{
+	a.controlServer.MessageHandler(ctrlservice.MessageRouter{
 		samplesource.UpdateIntervalOpCode:     control.MessageHandlerFunc(a.HandleUpdateInterval),
 		samplesource.UpdateActiveStatusOpCode: control.MessageHandlerFunc(a.HandleUpdateActiveStatus),
-	}))
+	})
 
 	<-ctx.Done()
 	return nil

@@ -9,16 +9,12 @@ import (
 	"knative.dev/control-data-plane-communication/pkg/control"
 )
 
-type messageRouter map[uint8]control.MessageHandler
+type MessageRouter map[control.OpCode]control.MessageHandler
 
-func NewMessageRouter(routes map[uint8]control.MessageHandler) control.MessageHandler {
-	return messageRouter(routes)
-}
-
-func (c messageRouter) HandleServiceMessage(ctx context.Context, message control.ServiceMessage) {
+func (c MessageRouter) HandleServiceMessage(ctx context.Context, message control.ServiceMessage) {
 	logger := logging.FromContext(ctx)
 
-	handler, ok := c[message.Headers().OpCode()]
+	handler, ok := c[control.OpCode(message.Headers().OpCode())]
 	if ok {
 		handler.HandleServiceMessage(ctx, message)
 		return

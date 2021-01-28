@@ -3,15 +3,17 @@ package samplesource
 import (
 	"fmt"
 	"time"
+
+	"knative.dev/control-data-plane-communication/pkg/control"
 )
 
 // This just contains the different opcodes
 
 const (
-	UpdateActiveStatusOpCode uint8 = 1
-	UpdateIntervalOpCode     uint8 = 2
-	NotifyActiveStatusOpCode uint8 = 3
-	NotifyIntervalOpCode     uint8 = 4
+	UpdateActiveStatusOpCode control.OpCode = 1
+	UpdateIntervalOpCode     control.OpCode = 2
+	NotifyActiveStatusOpCode control.OpCode = 3
+	NotifyIntervalOpCode     control.OpCode = 4
 )
 
 type ActiveStatus bool

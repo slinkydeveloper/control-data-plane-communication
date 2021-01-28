@@ -17,7 +17,7 @@ type cachingService struct {
 	ctx context.Context
 
 	sentMessageMutex sync.RWMutex
-	sentMessages     map[uint8]interface{}
+	sentMessages     map[control.OpCode]interface{}
 }
 
 var _ control.Service = (*cachingService)(nil)
@@ -29,12 +29,12 @@ func WithCachingService(ctx context.Context) control.ServiceWrapper {
 		return &cachingService{
 			Service:      service,
 			ctx:          ctx,
-			sentMessages: make(map[uint8]interface{}),
+			sentMessages: make(map[control.OpCode]interface{}),
 		}
 	}
 }
 
-func (c *cachingService) SendAndWaitForAck(opcode uint8, payload encoding.BinaryMarshaler) error {
+func (c *cachingService) SendAndWaitForAck(opcode control.OpCode, payload encoding.BinaryMarshaler) error {
 	c.sentMessageMutex.RLock()
 	lastPayload, ok := c.sentMessages[opcode]
 	c.sentMessageMutex.RUnlock()

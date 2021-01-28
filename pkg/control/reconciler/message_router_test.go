@@ -37,7 +37,7 @@ func TestMessageRouter(t *testing.T) {
 	opcode1Count := atomic.NewInt32(0)
 	opcode2Count := atomic.NewInt32(0)
 
-	dataPlane.MessageHandler(service.NewMessageRouter(map[uint8]control.MessageHandler{
+	dataPlane.MessageHandler(service.NewMessageRouter(map[control.OpCode]control.MessageHandler{
 		1: control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 			require.Equal(t, uint8(1), message.Headers().OpCode())
 			require.Equal(t, "Funky!", string(message.Payload()))
@@ -53,7 +53,7 @@ func TestMessageRouter(t *testing.T) {
 	}))
 
 	for i := 0; i < 10; i++ {
-		require.NoError(t, controlPlane.SendAndWaitForAck(uint8((i%2)+1), mockMessage("Funky!")))
+		require.NoError(t, controlPlane.SendAndWaitForAck(control.OpCode((i%2)+1), mockMessage("Funky!")))
 	}
 
 	require.Equal(t, int32(5), opcode1Count.Load())
@@ -66,7 +66,7 @@ func TestMessageRouter_MessageNotMatchingAck(t *testing.T) {
 	opcode1Count := atomic.NewInt32(0)
 	opcode2Count := atomic.NewInt32(0)
 
-	dataPlane.MessageHandler(service.NewMessageRouter(map[uint8]control.MessageHandler{
+	dataPlane.MessageHandler(service.NewMessageRouter(map[control.OpCode]control.MessageHandler{
 		1: control.MessageHandlerFunc(func(ctx context.Context, message control.ServiceMessage) {
 			require.Equal(t, uint8(1), message.Headers().OpCode())
 			require.Equal(t, "Funky!", string(message.Payload()))
