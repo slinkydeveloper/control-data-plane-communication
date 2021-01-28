@@ -1,6 +1,7 @@
 package event
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -20,14 +21,4 @@ func caseInsensitiveSearch(key string, space map[string]interface{}) (interface{
 	return nil, false
 }
 
-func IsExtensionNameValid(key string) bool {
-	if len(key) < 1 || len(key) > 20 {
-		return false
-	}
-	for _, c := range key {
-		if !((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
-			return false
-		}
-	}
-	return true
-}
+var IsAlphaNumeric = regexp.MustCompile(`^[a-zA-Z0-9]+$`).MatchString
