@@ -8,14 +8,33 @@ import (
 )
 
 const (
-	maximumSupportedVersion uint16 = 0
-	outboundMessageVersion         = maximumSupportedVersion
+	maximumSupportedVersion uint8 = 0
+	outboundMessageVersion        = maximumSupportedVersion
 )
 
 type MessageFlag uint8
 
+/*
+	MessageHeader represents a message header
+
+	+---------+---------+-------+----------+--------+
+	|         |   0-8   |  8-16 |   16-24  |  24-32 |
+	+---------+---------+-------+----------+--------+
+	| 0-32    | version | flags | <unused> | opcode |
+	+---------+---------+-------+----------+--------+
+	| 32-64   |              uuid[0:4]              |
+	+---------+-------------------------------------+
+	| 64-96   |              uuid[4:8]              |
+	+---------+-------------------------------------+
+	| 96-128  |              uuid[8:12]             |
+	+---------+-------------------------------------+
+	| 128-160 |             uuid[12:16]             |
+	+---------+-------------------------------------+
+	| 160-192 |                length               |
+	+---------+-------------------------------------+
+*/
 type MessageHeader struct {
-	version uint16
+	version uint8
 	flags   uint8
 	opcode  uint8
 	uuid    [16]byte
@@ -23,7 +42,7 @@ type MessageHeader struct {
 	length uint32
 }
 
-func (m MessageHeader) Version() uint16 {
+func (m MessageHeader) Version() uint8 {
 	return m.version
 }
 
@@ -46,8 +65,8 @@ func (m MessageHeader) Length() uint32 {
 func (m MessageHeader) WriteTo(w io.Writer) (int64, error) {
 	var b [4]byte
 	var n int64
-	binary.BigEndian.PutUint16(b[0:2], m.version)
-	b[2] = m.flags
+	b[0] = m.version
+	b[1] = m.flags
 	b[3] = m.opcode
 	n1, err := w.Write(b[0:4])
 	n = n + int64(n1)
@@ -69,8 +88,8 @@ func (m MessageHeader) WriteTo(w io.Writer) (int64, error) {
 
 func messageHeaderFromBytes(b [24]byte) MessageHeader {
 	m := MessageHeader{}
-	m.version = binary.BigEndian.Uint16(b[0:2])
-	m.flags = b[2]
+	m.version = b[0]
+	m.flags = b[1]
 	m.opcode = b[3]
 	for i := 0; i < 16; i++ {
 		m.uuid[i] = b[4+i]

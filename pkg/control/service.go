@@ -5,7 +5,9 @@ import (
 	"encoding"
 )
 
-const AckOpCode uint8 = 0
+type OpCode uint8
+
+const AckOpCode OpCode = 0
 
 type ServiceMessage struct {
 	inboundMessage *InboundMessage
@@ -53,7 +55,7 @@ func (c ErrorHandlerFunc) HandleServiceError(ctx context.Context, err error) {
 
 // Service is the high level interface that handles send with retries and acks
 type Service interface {
-	SendAndWaitForAck(opcode uint8, payload encoding.BinaryMarshaler) error
+	SendAndWaitForAck(opcode OpCode, payload encoding.BinaryMarshaler) error
 	// This is non blocking, because a polling loop is already running inside.
 	MessageHandler(handler MessageHandler)
 	// This is non blocking, because a polling loop is already running inside.

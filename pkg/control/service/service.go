@@ -44,7 +44,7 @@ func NewService(ctx context.Context, connection ctrl.Connection) *service {
 	return cs
 }
 
-func (c *service) SendAndWaitForAck(opcode uint8, payload encoding.BinaryMarshaler) error {
+func (c *service) SendAndWaitForAck(opcode ctrl.OpCode, payload encoding.BinaryMarshaler) error {
 	b, err := payload.MarshalBinary()
 	if err != nil {
 		return err
@@ -52,11 +52,11 @@ func (c *service) SendAndWaitForAck(opcode uint8, payload encoding.BinaryMarshal
 	return c.sendBinaryAndWaitForAck(opcode, b)
 }
 
-func (c *service) sendBinaryAndWaitForAck(opcode uint8, payload []byte) error {
+func (c *service) sendBinaryAndWaitForAck(opcode ctrl.OpCode, payload []byte) error {
 	if opcode == ctrl.AckOpCode {
 		return fmt.Errorf("you cannot send an ack manually")
 	}
-	msg := ctrl.NewOutboundMessage(opcode, payload)
+	msg := ctrl.NewOutboundMessage(uint8(opcode), payload)
 
 	logging.FromContext(c.ctx).Debugf("Going to send message with opcode %d and uuid %s", msg.OpCode(), msg.UUID().String())
 
@@ -122,7 +122,7 @@ func (c *service) startPolling() {
 }
 
 func (c *service) accept(msg *ctrl.InboundMessage) {
-	if msg.OpCode() == ctrl.AckOpCode {
+	if msg.OpCode() == uint8(ctrl.AckOpCode) {
 		// Propagate the ack
 		c.waitingAcksMutex.Lock()
 		ackCh := c.waitingAcks[msg.UUID()]
@@ -157,5 +157,5 @@ func (c *service) acceptError(err error) {
 }
 
 func newAckMessage(uuid [16]byte) ctrl.OutboundMessage {
-	return ctrl.NewOutboundMessageWithUUID(uuid, ctrl.AckOpCode, nil)
+	return ctrl.NewOutboundMessageWithUUID(uuid, uint8(ctrl.AckOpCode), nil)
 }

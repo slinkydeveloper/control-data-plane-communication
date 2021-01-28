@@ -166,10 +166,10 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 		string(src.UID),
 		[]string{raPodIp},
 		func(podIp string, service control.Service) {
-			service.MessageHandler(ctrlservice.NewMessageRouter(map[uint8]control.MessageHandler{
+			service.MessageHandler(ctrlservice.MessageRouter{
 				ctrlsamplesource.NotifyIntervalOpCode:     r.intervalNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp, ctrlreconciler.PassNewValue),
 				ctrlsamplesource.NotifyActiveStatusOpCode: r.activeStatusNotificationsStore.ControlMessageHandler(srcNamespacedName, podIp, ctrlreconciler.PassNewValue),
-			}))
+			})
 		},
 		func(podIp string) {
 			r.intervalNotificationsStore.CleanPodNotification(srcNamespacedName, podIp)

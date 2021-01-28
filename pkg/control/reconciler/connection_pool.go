@@ -62,7 +62,7 @@ func (cc *ControlPlaneConnectionPool) GetConnectedHosts(key string) []string {
 		return nil
 	}
 	hosts := make([]string, 0, len(m))
-	for k, _ := range m {
+	for k := range m {
 		hosts = append(hosts, k)
 	}
 	return hosts
