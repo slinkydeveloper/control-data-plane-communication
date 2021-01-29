@@ -36,10 +36,11 @@ func LoadServerTLSConfig() (*tls.Config, error) {
 	certPool := x509.NewCertPool()
 	certPool.AppendCertsFromPEM(caCert)
 	conf := &tls.Config{
-		Certificates: []tls.Certificate{dataPlaneCert},
-		ClientCAs:    certPool,
-		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ServerName:   fakeDnsName,
+		Certificates:   []tls.Certificate{dataPlaneCert},
+		ClientCAs:      certPool,
+		ClientAuth:     tls.RequireAndVerifyClientCert,
+		ServerName:     fakeDnsName,
+		GetCertificate: nil, // TODO we should use this!!!
 	}
 
 	return conf, nil

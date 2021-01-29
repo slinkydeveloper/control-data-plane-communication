@@ -96,5 +96,7 @@ func NewController(
 		Handler:    controller.HandleAll(impl.EnqueueControllerOf),
 	})
 
+	// TODO secret listener that triggers global resync
+
 	return impl
 }

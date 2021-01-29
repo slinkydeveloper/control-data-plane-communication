@@ -18,3 +18,5 @@ require (
 	knative.dev/hack v0.0.0-20210120165453-8d623a0af457
 	knative.dev/pkg v0.0.0-20210127163530-0d31134d5f4e
 )
+
+replace knative.dev/pkg => ../pkg
