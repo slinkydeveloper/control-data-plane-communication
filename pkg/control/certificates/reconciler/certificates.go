@@ -38,6 +38,7 @@ import (
 )
 
 const (
+	caCertKey          = "ca.cert"
 	certKey            = "public.cert"
 	privateKeyKey      = "private.key"
 	expirationInterval = time.Hour * 24 * 30 // 30 days
@@ -73,7 +74,7 @@ func (r *reconciler) ReconcileKind(ctx context.Context, secret *corev1.Secret) p
 		r.logger.Errorf("Error accessing CA certificate secret %q %q: %v", system.Namespace(), r.caSecretName, err)
 		return err
 	}
-	caCert, caPk, err := parseAndValidateSecret(caSecret)
+	caCert, caPk, err := parseAndValidateSecret(caSecret, false)
 	if err != nil {
 		// We need to generate a new CA cert, then shortcircuit the reconciler
 		keyPair, err := resources.CreateCACerts(ctx, expirationInterval)
@@ -83,7 +84,7 @@ func (r *reconciler) ReconcileKind(ctx context.Context, secret *corev1.Secret) p
 		return r.commitUpdatedSecret(ctx, caSecret, keyPair)
 	}
 
-	_, _, err = parseAndValidateSecret(secret)
+	_, _, err = parseAndValidateSecret(secret, true)
 	if err != nil {
 		// Check the secret to reconcile type
 		var keyPair *resources.KeyPair
@@ -97,13 +98,14 @@ func (r *reconciler) ReconcileKind(ctx context.Context, secret *corev1.Secret) p
 		if err != nil {
 			return fmt.Errorf("cannot generate the cert: %v", err)
 		}
+		secret.Data[caCertKey] = caSecret.Data[certKey]
 		return r.commitUpdatedSecret(ctx, secret, keyPair)
 	}
 
 	return nil
 }
 
-func parseAndValidateSecret(secret *corev1.Secret) (*x509.Certificate, *rsa.PrivateKey, error) {
+func parseAndValidateSecret(secret *corev1.Secret, shouldContainCaCert bool) (*x509.Certificate, *rsa.PrivateKey, error) {
 	certBytes, ok := secret.Data[certKey]
 	if !ok {
 		return nil, nil, fmt.Errorf("missing cert bytes")
@@ -111,6 +113,11 @@ func parseAndValidateSecret(secret *corev1.Secret) (*x509.Certificate, *rsa.Priv
 	pkBytes, ok := secret.Data[privateKeyKey]
 	if !ok {
 		return nil, nil, fmt.Errorf("missing pk bytes")
+	}
+	if shouldContainCaCert {
+		if _, ok := secret.Data[caCertKey]; !ok {
+			return nil, nil, fmt.Errorf("missing ca cert bytes")
+		}
 	}
 
 	caCert, caPk, err := resources.ParseCert(certBytes, pkBytes)
