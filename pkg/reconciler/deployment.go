@@ -84,12 +84,6 @@ func (r *DeploymentReconciler) ReconcileSecret(
 	} else if !metav1.IsControlledBy(secret, owner.GetObjectMeta()) {
 		return nil, fmt.Errorf("secret %q is not owned by %s %q",
 			secret.Name, owner.GetGroupVersionKind().Kind, owner.GetObjectMeta().GetName())
-	} else if !equality.Semantic.DeepEqual(expected.Data, secret.Data) {
-		secret.Data = expected.Data
-		if secret, err = r.KubeClientSet.CoreV1().Secrets(namespace).Update(ctx, expected, metav1.UpdateOptions{}); err != nil {
-			return secret, err
-		}
-		return secret, newSecretUpdated(secret.Namespace, secret.Name)
 	} else {
 		logging.FromContext(ctx).Debugw("Reusing existing secret", zap.Any("secret", secret))
 	}

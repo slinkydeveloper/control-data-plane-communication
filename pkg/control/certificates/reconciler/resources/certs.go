@@ -14,12 +14,8 @@ import (
 
 	"go.uber.org/zap"
 	"knative.dev/pkg/logging"
-)
 
-const (
-	organization      = "knative.dev"
-	fakeDnsName       = "data-plane." + organization
-	rotationThreshold = 1 * time.Minute
+	"knative.dev/control-data-plane-communication/pkg/control/certificates"
 )
 
 var randReader = rand.Reader
@@ -35,14 +31,14 @@ func createCertTemplate(expirationInterval time.Duration) (*x509.Certificate, er
 	tmpl := x509.Certificate{
 		SerialNumber: serialNumber,
 		Subject: pkix.Name{
-			Organization: []string{organization},
+			Organization: []string{certificates.Organization},
 			CommonName:   "control-plane",
 		},
 		SignatureAlgorithm:    x509.SHA256WithRSA,
 		NotBefore:             time.Now(),
 		NotAfter:              time.Now().Add(expirationInterval),
 		BasicConstraintsValid: true,
-		DNSNames:              []string{fakeDnsName},
+		DNSNames:              []string{certificates.FakeDnsName},
 	}
 	return &tmpl, nil
 }
@@ -95,7 +91,8 @@ func createCert(template, parent *x509.Certificate, pub, parentPriv interface{})
 	return
 }
 
-func CreateCACerts(ctx context.Context, expirationInterval time.Duration) (*KeyPair, error) {
+// CreateCACerts generates the root CA cert
+func CreateCACerts(ctx context.Context, expirationInterval time.Duration) (*certificates.KeyPair, error) {
 	logger := logging.FromContext(ctx)
 	caKeyPair, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -117,10 +114,11 @@ func CreateCACerts(ctx context.Context, expirationInterval time.Duration) (*KeyP
 	caPrivateKeyPem := &pem.Block{
 		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(caKeyPair),
 	}
-	return newKeyPair(caPrivateKeyPem, caCertPem), nil
+	return certificates.NewKeyPair(caPrivateKeyPem, caCertPem), nil
 }
 
-func CreateControlPlaneCert(ctx context.Context, caKey *rsa.PrivateKey, caCertificate *x509.Certificate, expirationInterval time.Duration) (*KeyPair, error) {
+// CreateControlPlaneCert generates the certificate for the client
+func CreateControlPlaneCert(ctx context.Context, caKey *rsa.PrivateKey, caCertificate *x509.Certificate, expirationInterval time.Duration) (*certificates.KeyPair, error) {
 	logger := logging.FromContext(ctx)
 
 	// Then create the private key for the serving cert
@@ -144,10 +142,11 @@ func CreateControlPlaneCert(ctx context.Context, caKey *rsa.PrivateKey, caCertif
 	privateClientKeyPEM := &pem.Block{
 		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(clientKey),
 	}
-	return newKeyPair(privateClientKeyPEM, clientCertPEM), nil
+	return certificates.NewKeyPair(privateClientKeyPEM, clientCertPEM), nil
 }
 
-func CreateDataPlaneCert(ctx context.Context, caKey *rsa.PrivateKey, caCertificate *x509.Certificate, expirationInterval time.Duration) (*KeyPair, error) {
+// CreateDataPlaneCert generates the certificate for the server
+func CreateDataPlaneCert(ctx context.Context, caKey *rsa.PrivateKey, caCertificate *x509.Certificate, expirationInterval time.Duration) (*certificates.KeyPair, error) {
 	logger := logging.FromContext(ctx)
 
 	// Then create the private key for the serving cert
@@ -171,42 +170,10 @@ func CreateDataPlaneCert(ctx context.Context, caKey *rsa.PrivateKey, caCertifica
 	privateServerKeyPEM := &pem.Block{
 		Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(serverKey),
 	}
-	return newKeyPair(privateServerKeyPEM, serverCertPEM), nil
+	return certificates.NewKeyPair(privateServerKeyPEM, serverCertPEM), nil
 }
 
-type KeyPair struct {
-	privateKeyBlock    *pem.Block
-	privateKeyPemBytes []byte
-
-	certBlock *pem.Block
-	certBytes []byte
-}
-
-func newKeyPair(privateKey *pem.Block, cert *pem.Block) *KeyPair {
-	return &KeyPair{
-		privateKeyBlock:    privateKey,
-		privateKeyPemBytes: pem.EncodeToMemory(privateKey),
-		certBlock:          cert,
-		certBytes:          pem.EncodeToMemory(cert),
-	}
-}
-
-func (kh *KeyPair) PrivateKey() *pem.Block {
-	return kh.privateKeyBlock
-}
-
-func (kh *KeyPair) PrivateKeyBytes() []byte {
-	return kh.privateKeyPemBytes
-}
-
-func (kh *KeyPair) Cert() *pem.Block {
-	return kh.certBlock
-}
-
-func (kh *KeyPair) CertBytes() []byte {
-	return kh.certBytes
-}
-
+// ParseCert parses a certificate/private key pair from serialized pem blocks
 func ParseCert(certBytes []byte, privateKeyPemBytes []byte) (*x509.Certificate, *rsa.PrivateKey, error) {
 	certBlock, _ := pem.Decode(certBytes)
 	if certBlock == nil {
@@ -231,8 +198,9 @@ func ParseCert(certBytes []byte, privateKeyPemBytes []byte) (*x509.Certificate, 
 	return cert, pk, err
 }
 
-func ValidateCert(cert *x509.Certificate) error {
-	if cert.NotAfter.After(time.Now().Add(rotationThreshold)) {
+// ValidateCert checks the expiration of the certificate
+func ValidateCert(cert *x509.Certificate, rotationThreshold time.Duration) error {
+	if !cert.NotAfter.After(time.Now().Add(rotationThreshold)) {
 		return fmt.Errorf("certificate is going to expire %v", cert.NotAfter)
 	}
 	return nil

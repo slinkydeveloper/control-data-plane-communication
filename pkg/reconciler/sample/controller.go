@@ -19,14 +19,14 @@ package sample
 import (
 	"context"
 
-	"k8s.io/apimachinery/pkg/types"
 	reconcilersource "knative.dev/eventing/pkg/reconciler/source"
+	secretinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/secret"
+	"knative.dev/pkg/system"
 
 	"github.com/kelseyhightower/envconfig"
 	"k8s.io/client-go/tools/cache"
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
-	"knative.dev/control-data-plane-communication/pkg/control/network"
 	ctrlreconciler "knative.dev/control-data-plane-communication/pkg/control/reconciler"
 	ctrlsamplesource "knative.dev/control-data-plane-communication/pkg/control/samplesource"
 	ctrlservice "knative.dev/control-data-plane-communication/pkg/control/service"
@@ -52,30 +52,22 @@ func NewController(
 	ctx context.Context,
 	cmw configmap.Watcher,
 ) *controller.Impl {
+	secretInformer := secretinformer.Get(ctx)
 	deploymentInformer := deploymentinformer.Get(ctx)
 	sampleSourceInformer := samplesourceinformer.Get(ctx)
 	podInformer := podinformer.Get(ctx)
 
-	// TODO We need an initial setup here that persists somewhere (maybe in a secret?) the cert manager.
-	certManager, err := network.NewCertificateManager(ctx)
-	if err != nil {
-		logging.FromContext(ctx).Panicf("cannot create the cert manager: %v", err)
-	}
-
 	r := &Reconciler{
 		dr: &reconciler.DeploymentReconciler{KubeClientSet: kubeclient.Get(ctx)},
 		// Config accessor takes care of tracing/config/logging config propagation to the receive adapter
-		configAccessor:     reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
-		certificateManager: certManager,
+		configAccessor: reconcilersource.WatchConfigurations(ctx, "control-data-plane-communication", cmw),
 		controlConnections: ctrlreconciler.NewControlPlaneConnectionPool(
-			certManager,
+			ctrlreconciler.NewCertificateGetter(secretInformer.Lister(), system.Namespace(), "sample-source-control-plane-cert"),
 			ctrlreconciler.WithServiceWrapper(ctrlservice.WithCachingService(ctx)),
 		),
 		podsIpGetter: ctrlreconciler.PodIpGetter{
 			Lister: podInformer.Lister(),
 		},
-
-		keyPairs: make(map[types.NamespacedName]*network.KeyPair),
 	}
 	if err := envconfig.Process("", r); err != nil {
 		logging.FromContext(ctx).Panicf("required environment variable is not defined: %v", err)
@@ -90,13 +82,10 @@ func NewController(
 	logging.FromContext(ctx).Info("Setting up event handlers")
 
 	sampleSourceInformer.Informer().AddEventHandler(controller.HandleAll(impl.Enqueue))
-
 	deploymentInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
 		FilterFunc: controller.FilterControllerGK(v1alpha1.Kind("SampleSource")),
 		Handler:    controller.HandleAll(impl.EnqueueControllerOf),
 	})
-
-	// TODO secret listener that triggers global resync
 
 	return impl
 }

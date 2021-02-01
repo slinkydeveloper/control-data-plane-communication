@@ -18,8 +18,8 @@ const (
 )
 
 type ControlPlaneConnectionPool struct {
-	certificateManager *network.CertificateManager
-	baseDialOptions    *net.Dialer
+	certHolder      *CertificateGetter
+	baseDialOptions *net.Dialer
 
 	serviceWrapperFactories []control.ServiceWrapper
 
@@ -36,9 +36,9 @@ func NewInsecureControlPlaneConnectionPool(opts ...ControlPlaneConnectionPoolOpt
 	return NewControlPlaneConnectionPool(nil, opts...)
 }
 
-func NewControlPlaneConnectionPool(certificateManager *network.CertificateManager, opts ...ControlPlaneConnectionPoolOption) *ControlPlaneConnectionPool {
+func NewControlPlaneConnectionPool(certHolder *CertificateGetter, opts ...ControlPlaneConnectionPoolOption) *ControlPlaneConnectionPool {
 	pool := &ControlPlaneConnectionPool{
-		certificateManager: certificateManager,
+		certHolder: certHolder,
 		baseDialOptions: &net.Dialer{
 			KeepAlive: keepAlive,
 			Deadline:  time.Time{},
@@ -177,11 +177,11 @@ func (cc *ControlPlaneConnectionPool) ReconcileConnections(ctx context.Context, 
 func (cc *ControlPlaneConnectionPool) DialControlService(ctx context.Context, key string, host string) (string, control.Service, error) {
 	var dialer network.Dialer
 	dialer = cc.baseDialOptions
-	// Check if certificateManager is set up, otherwise connect without tls
-	if cc.certificateManager != nil {
+	// Check if certHolder is set up, otherwise connect without tls
+	if cc.certHolder != nil {
 		// Create TLS dialer
 		var err error
-		dialer, err = cc.certificateManager.GenerateTLSDialer(cc.baseDialOptions)
+		dialer, err = cc.certHolder.GenerateTLSDialer(cc.baseDialOptions)
 		if err != nil {
 			return "", nil, err
 		}

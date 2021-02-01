@@ -22,6 +22,7 @@ import (
 	"github.com/kelseyhightower/envconfig"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
+	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	"knative.dev/pkg/client/injection/kube/reconciler/core/v1/secret"
 	"knative.dev/pkg/system"
 
@@ -42,12 +43,16 @@ func NewControllerFactory(componentName string) func(ctx context.Context, cmw co
 		ctx context.Context,
 		cmw configmap.Watcher,
 	) *controller.Impl {
+		ctx = logging.WithLogger(ctx, logging.FromContext(ctx).Named("ctrl-secrets-controller"))
+
 		secretInformer := secretinformer.Get(ctx)
 
 		caSecretName := componentName + caSecretNamePostfix
 		labelName := componentName + secretLabelNamePostfix
 
 		r := &reconciler{
+			client: kubeclient.Get(ctx),
+
 			secretLister:        secretInformer.Lister(),
 			caSecretName:        caSecretName,
 			secretTypeLabelName: labelName,

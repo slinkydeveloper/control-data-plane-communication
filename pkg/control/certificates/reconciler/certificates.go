@@ -34,14 +34,13 @@ import (
 
 	reconcilersecret "knative.dev/pkg/client/injection/kube/reconciler/core/v1/secret"
 
+	"knative.dev/control-data-plane-communication/pkg/control/certificates"
 	"knative.dev/control-data-plane-communication/pkg/control/certificates/reconciler/resources"
 )
 
 const (
-	caCertKey          = "ca.cert"
-	certKey            = "public.cert"
-	privateKeyKey      = "private.key"
 	expirationInterval = time.Hour * 24 * 30 // 30 days
+	rotationThreshold  = 10 * time.Minute
 
 	controlPlaneSecretType = "control-plane"
 	dataPlaneSecretType    = "data-plane"
@@ -62,6 +61,11 @@ var _ reconcilersecret.Interface = (*reconciler)(nil)
 
 // ReconcileKind implements Interface.ReconcileKind.
 func (r *reconciler) ReconcileKind(ctx context.Context, secret *corev1.Secret) pkgreconciler.Event {
+	if !r.shouldReconcile(secret) {
+		r.logger.Infof("Skipping reconciling secret %q:%q", secret.Namespace, secret.Name)
+		return nil
+	}
+	r.logger.Infof("Updating secret %q:%q", secret.Namespace, secret.Name)
 
 	// Reconcile CA secret first
 	caSecret, err := r.secretLister.Secrets(system.Namespace()).Get(r.caSecretName)
@@ -76,18 +80,23 @@ func (r *reconciler) ReconcileKind(ctx context.Context, secret *corev1.Secret) p
 	}
 	caCert, caPk, err := parseAndValidateSecret(caSecret, false)
 	if err != nil {
+		r.logger.Infof("CA cert invalid: %v", err)
+
 		// We need to generate a new CA cert, then shortcircuit the reconciler
 		keyPair, err := resources.CreateCACerts(ctx, expirationInterval)
 		if err != nil {
 			return fmt.Errorf("cannot generate the CA cert: %v", err)
 		}
-		return r.commitUpdatedSecret(ctx, caSecret, keyPair)
+		return r.commitUpdatedSecret(ctx, caSecret, keyPair, nil)
 	}
 
+	// Reconcile the provided secret
 	_, _, err = parseAndValidateSecret(secret, true)
 	if err != nil {
+		r.logger.Infof("Secret invalid: %v", err)
+
 		// Check the secret to reconcile type
-		var keyPair *resources.KeyPair
+		var keyPair *certificates.KeyPair
 		if secret.Labels[r.secretTypeLabelName] == dataPlaneSecretType {
 			keyPair, err = resources.CreateDataPlaneCert(ctx, caPk, caCert, expirationInterval)
 		} else if secret.Labels[r.secretTypeLabelName] == controlPlaneSecretType {
@@ -98,24 +107,23 @@ func (r *reconciler) ReconcileKind(ctx context.Context, secret *corev1.Secret) p
 		if err != nil {
 			return fmt.Errorf("cannot generate the cert: %v", err)
 		}
-		secret.Data[caCertKey] = caSecret.Data[certKey]
-		return r.commitUpdatedSecret(ctx, secret, keyPair)
+		return r.commitUpdatedSecret(ctx, secret, keyPair, caSecret.Data[certificates.SecretCertKey])
 	}
 
 	return nil
 }
 
 func parseAndValidateSecret(secret *corev1.Secret, shouldContainCaCert bool) (*x509.Certificate, *rsa.PrivateKey, error) {
-	certBytes, ok := secret.Data[certKey]
+	certBytes, ok := secret.Data[certificates.SecretCertKey]
 	if !ok {
 		return nil, nil, fmt.Errorf("missing cert bytes")
 	}
-	pkBytes, ok := secret.Data[privateKeyKey]
+	pkBytes, ok := secret.Data[certificates.SecretPKKey]
 	if !ok {
 		return nil, nil, fmt.Errorf("missing pk bytes")
 	}
 	if shouldContainCaCert {
-		if _, ok := secret.Data[caCertKey]; !ok {
+		if _, ok := secret.Data[certificates.SecretCaCertKey]; !ok {
 			return nil, nil, fmt.Errorf("missing ca cert bytes")
 		}
 	}
@@ -124,16 +132,33 @@ func parseAndValidateSecret(secret *corev1.Secret, shouldContainCaCert bool) (*x
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := resources.ValidateCert(caCert); err != nil {
+	if err := resources.ValidateCert(caCert, rotationThreshold); err != nil {
 		return nil, nil, err
 	}
 	return caCert, caPk, nil
 }
 
-func (r *reconciler) commitUpdatedSecret(ctx context.Context, secret *corev1.Secret, keyPair *resources.KeyPair) error {
-	secret.Data[certKey] = keyPair.CertBytes()
-	secret.Data[privateKeyKey] = keyPair.PrivateKeyBytes()
+func (r *reconciler) commitUpdatedSecret(ctx context.Context, secret *corev1.Secret, keyPair *certificates.KeyPair, caCert []byte) error {
+	// Don't modify the informer copy.
+	secret = secret.DeepCopy()
+
+	secret.Data = make(map[string][]byte, 3)
+	secret.Data[certificates.SecretCertKey] = keyPair.CertBytes()
+	secret.Data[certificates.SecretPKKey] = keyPair.PrivateKeyBytes()
+	if caCert != nil {
+		secret.Data[certificates.SecretCaCertKey] = caCert
+	}
 
 	_, err := r.client.CoreV1().Secrets(secret.Namespace).Update(ctx, secret, metav1.UpdateOptions{})
 	return err
+}
+
+func (r *reconciler) shouldReconcile(secret *corev1.Secret) bool {
+	// Is CA secret?
+	if secret.Name == r.caSecretName && secret.Namespace == system.Namespace() {
+		return false
+	}
+
+	_, hasLabel := secret.Labels[r.secretTypeLabelName]
+	return hasLabel
 }
