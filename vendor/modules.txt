@@ -801,7 +801,7 @@ knative.dev/eventing/pkg/reconciler/source
 # knative.dev/hack v0.0.0-20210120165453-8d623a0af457
 ## explicit
 knative.dev/hack
-# knative.dev/pkg v0.0.0-20210127163530-0d31134d5f4e
+# knative.dev/pkg v0.0.0-20210127163530-0d31134d5f4e => ../pkg
 ## explicit
 knative.dev/pkg/apis
 knative.dev/pkg/apis/duck
@@ -815,7 +815,9 @@ knative.dev/pkg/client/injection/kube/informers/admissionregistration/v1/mutatin
 knative.dev/pkg/client/injection/kube/informers/admissionregistration/v1/validatingwebhookconfiguration
 knative.dev/pkg/client/injection/kube/informers/apps/v1/deployment
 knative.dev/pkg/client/injection/kube/informers/core/v1/pod
+knative.dev/pkg/client/injection/kube/informers/core/v1/secret
 knative.dev/pkg/client/injection/kube/informers/factory
+knative.dev/pkg/client/injection/kube/reconciler/core/v1/secret
 knative.dev/pkg/codegen/cmd/injection-gen
 knative.dev/pkg/codegen/cmd/injection-gen/args
 knative.dev/pkg/codegen/cmd/injection-gen/generators
@@ -862,3 +864,4 @@ knative.dev/pkg/webhook/resourcesemantics/validation
 sigs.k8s.io/structured-merge-diff/v4/value
 # sigs.k8s.io/yaml v1.2.0
 sigs.k8s.io/yaml
+# knative.dev/pkg => ../pkg

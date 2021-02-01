@@ -20,8 +20,10 @@ import (
 	"context"
 
 	"github.com/kelseyhightower/envconfig"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 	"knative.dev/pkg/client/injection/kube/reconciler/core/v1/secret"
+	"knative.dev/pkg/system"
 
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
@@ -30,31 +32,56 @@ import (
 	secretinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/secret"
 )
 
-// NewController initializes the controller and is called by the generated code
-// Registers event handlers to enqueue events
-func NewController(
-	ctx context.Context,
-	cmw configmap.Watcher,
-) *controller.Impl {
-	sampleSourceInformer := secretinformer.Get(ctx)
+const (
+	caSecretNamePostfix    = "-ctrl-ca"
+	secretLabelNamePostfix = "-ctrl"
+)
 
-	r := &reconciler{
-		sampleSourceInformer: sampleSourceInformer,
+func NewControllerFactory(componentName string) func(ctx context.Context, cmw configmap.Watcher) *controller.Impl {
+	return func(
+		ctx context.Context,
+		cmw configmap.Watcher,
+	) *controller.Impl {
+		secretInformer := secretinformer.Get(ctx)
+
+		caSecretName := componentName + caSecretNamePostfix
+		labelName := componentName + secretLabelNamePostfix
+
+		r := &reconciler{
+			secretLister:        secretInformer.Lister(),
+			caSecretName:        caSecretName,
+			secretTypeLabelName: labelName,
+
+			logger: logging.FromContext(ctx),
+		}
+		if err := envconfig.Process("", r); err != nil {
+			logging.FromContext(ctx).Panicf("required environment variable is not defined: %v", err)
+		}
+
+		impl := secret.NewImpl(ctx, r)
+
+		logging.FromContext(ctx).Info("Setting up event handlers")
+
+		filterWithLabel := func(obj interface{}) bool {
+			sec := obj.(*corev1.Secret)
+			_, ok := sec.Labels[labelName]
+			return ok
+		}
+
+		// If the ca secret changes, global resync
+		secretInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
+			FilterFunc: controller.FilterWithNameAndNamespace(system.Namespace(), caSecretName),
+			Handler: controller.HandleAll(func(i interface{}) {
+				impl.FilteredGlobalResync(filterWithLabel, secretInformer.Informer())
+			}),
+		})
+
+		// Enqueue only secrets with expected label
+		secretInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
+			FilterFunc: filterWithLabel,
+			Handler:    controller.HandleAll(impl.Enqueue),
+		})
+
+		return impl
 	}
-	if err := envconfig.Process("", r); err != nil {
-		logging.FromContext(ctx).Panicf("required environment variable is not defined: %v", err)
-	}
-
-	impl := secret.NewImpl(ctx, r)
-
-	logging.FromContext(ctx).Info("Setting up event handlers")
-
-	// TODO some magic should happen here I guess
-
-	sampleSourceInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
-		FilterFunc: nil,
-		Handler:    nil, //TODO
-	})
-
-	return impl
 }
