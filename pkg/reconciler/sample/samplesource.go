@@ -22,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 
 	// k8s.io imports
@@ -56,6 +57,7 @@ type Reconciler struct {
 	configAccessor reconcilersource.ConfigAccessor
 
 	certificateManager *ctrlnetwork.CertificateManager
+	podsIpGetter       ctrlreconciler.PodIpGetter
 	controlConnections *ctrlreconciler.ControlPlaneConnectionPool
 
 	keyPairs      map[types.NamespacedName]*ctrlnetwork.KeyPair
@@ -135,29 +137,23 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 	logger.Infof("we have a RA deployment")
 
 	// We need to get all the pods for that ra deployment
-	pods, err := r.dr.KubeClientSet.CoreV1().Pods(src.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: resources.LabelSelector(src.Name),
-	})
+	podIPs, err := r.podsIpGetter.GetAllPodsIp(src.Namespace, labels.Set(resources.Labels(src.Name)).AsSelector())
 	if err != nil {
 		return fmt.Errorf("error getting receive adapter pods %q: %v", ra.Name, err)
 	}
 
-	if len(pods.Items) == 0 {
-		logger.Infof("returning because there is still no pod up for the deployment '%s'", ra.Name)
+	if len(podIPs) == 0 {
+		logger.Infof("returning because there is still no pod with ip for the deployment '%s'", ra.Name)
 		return nil
 	}
-	if len(pods.Items) > 1 {
+	if len(podIPs) > 1 {
 		// No need to fix this here, out of the scope of the prototype
-		return fmt.Errorf("wrong pods number: %d", len(pods.Items))
+		return fmt.Errorf("wrong pods number: %d", len(podIPs))
 	}
 
 	// TODO should we change this with endpoint tracking, creating a kube svc for the control endpoint?
 	//  How do we handle connections to specific pods for partitioning then?
-	raPodIp := pods.Items[0].Status.PodIP
-	if raPodIp == "" {
-		logger.Infof("returning because there is still no pod ip for the deployment '%s'", ra.Name)
-		return nil
-	}
+	raPodIp := podIPs[0]
 
 	// --- Reconcile the connections (in our case, only one connection is there)
 	srcNamespacedName := types.NamespacedName{Name: src.Name, Namespace: src.Namespace}

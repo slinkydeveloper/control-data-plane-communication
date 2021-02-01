@@ -40,6 +40,7 @@ import (
 
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	deploymentinformer "knative.dev/pkg/client/injection/kube/informers/apps/v1/deployment"
+	podinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/pod"
 
 	samplesourceinformer "knative.dev/control-data-plane-communication/pkg/client/injection/informers/samples/v1alpha1/samplesource"
 	"knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
@@ -53,6 +54,7 @@ func NewController(
 ) *controller.Impl {
 	deploymentInformer := deploymentinformer.Get(ctx)
 	sampleSourceInformer := samplesourceinformer.Get(ctx)
+	podInformer := podinformer.Get(ctx)
 
 	// TODO We need an initial setup here that persists somewhere (maybe in a secret?) the cert manager.
 	certManager, err := network.NewCertificateManager(ctx)
@@ -69,6 +71,9 @@ func NewController(
 			certManager,
 			ctrlreconciler.WithServiceWrapper(ctrlservice.WithCachingService(ctx)),
 		),
+		podsIpGetter: ctrlreconciler.PodIpGetter{
+			Lister: podInformer.Lister(),
+		},
 
 		keyPairs: make(map[types.NamespacedName]*network.KeyPair),
 	}
