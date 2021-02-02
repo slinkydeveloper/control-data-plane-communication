@@ -1,13 +1,17 @@
 package certificates
 
-import "encoding/pem"
+import (
+	"crypto/rsa"
+	"crypto/x509"
+	"encoding/pem"
+)
 
 type KeyPair struct {
 	privateKeyBlock    *pem.Block
 	privateKeyPemBytes []byte
 
-	certBlock *pem.Block
-	certBytes []byte
+	certBlock    *pem.Block
+	certPemBytes []byte
 }
 
 func NewKeyPair(privateKey *pem.Block, cert *pem.Block) *KeyPair {
@@ -15,7 +19,7 @@ func NewKeyPair(privateKey *pem.Block, cert *pem.Block) *KeyPair {
 		privateKeyBlock:    privateKey,
 		privateKeyPemBytes: pem.EncodeToMemory(privateKey),
 		certBlock:          cert,
-		certBytes:          pem.EncodeToMemory(cert),
+		certPemBytes:       pem.EncodeToMemory(cert),
 	}
 }
 
@@ -32,5 +36,9 @@ func (kh *KeyPair) Cert() *pem.Block {
 }
 
 func (kh *KeyPair) CertBytes() []byte {
-	return kh.certBytes
+	return kh.certPemBytes
+}
+
+func (kh *KeyPair) Parse() (*x509.Certificate, *rsa.PrivateKey, error) {
+	return ParseCert(kh.certPemBytes, kh.privateKeyPemBytes)
 }

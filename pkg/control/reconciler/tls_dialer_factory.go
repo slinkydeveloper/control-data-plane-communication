@@ -11,21 +11,25 @@ import (
 	"knative.dev/control-data-plane-communication/pkg/control/certificates"
 )
 
-type CertificateGetter struct {
+type TLSDialerFactory interface {
+	GenerateTLSDialer(baseDialOptions *net.Dialer) (*tls.Dialer, error)
+}
+
+type ListerCertificateGetter struct {
 	secrets   v1.SecretLister
 	name      string
 	namespace string
 }
 
-func NewCertificateGetter(secrets v1.SecretLister, namespace string, name string) *CertificateGetter {
-	return &CertificateGetter{
+func NewCertificateGetter(secrets v1.SecretLister, namespace string, name string) *ListerCertificateGetter {
+	return &ListerCertificateGetter{
 		secrets:   secrets,
 		name:      name,
 		namespace: namespace,
 	}
 }
 
-func (ch *CertificateGetter) GenerateTLSDialer(baseDialOptions *net.Dialer) (*tls.Dialer, error) {
+func (ch *ListerCertificateGetter) GenerateTLSDialer(baseDialOptions *net.Dialer) (*tls.Dialer, error) {
 	secret, err := ch.secrets.Secrets(ch.namespace).Get(ch.name)
 	if err != nil {
 		return nil, err

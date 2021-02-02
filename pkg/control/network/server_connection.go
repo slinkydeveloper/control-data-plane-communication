@@ -44,7 +44,7 @@ func LoadServerTLSConfigFromFile() (*tls.Config, error) {
 		Certificates: []tls.Certificate{cert},
 		ClientCAs:    certPool,
 		ClientAuth:   tls.RequireAndVerifyClientCert,
-		ServerName:   fakeDnsName,
+		ServerName:   certificates.FakeDnsName,
 	}
 
 	return conf, nil
