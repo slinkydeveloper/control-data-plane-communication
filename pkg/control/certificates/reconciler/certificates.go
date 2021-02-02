@@ -27,6 +27,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	types "k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes"
 	listerv1 "k8s.io/client-go/listers/core/v1"
 	pkgreconciler "knative.dev/pkg/reconciler"
@@ -35,12 +36,12 @@ import (
 	reconcilersecret "knative.dev/pkg/client/injection/kube/reconciler/core/v1/secret"
 
 	"knative.dev/control-data-plane-communication/pkg/control/certificates"
-	"knative.dev/control-data-plane-communication/pkg/control/certificates/reconciler/resources"
 )
 
 const (
-	expirationInterval = time.Hour * 24 * 30 // 30 days
-	rotationThreshold  = 10 * time.Minute
+	caExpirationInterval = time.Hour * 24 * 365 * 10 // 10 years
+	expirationInterval   = time.Hour * 24 * 30       // 30 days
+	rotationThreshold    = 10 * time.Minute
 
 	controlPlaneSecretType = "control-plane"
 	dataPlaneSecretType    = "data-plane"
@@ -52,6 +53,7 @@ type reconciler struct {
 	secretLister        listerv1.SecretLister
 	caSecretName        string
 	secretTypeLabelName string
+	enqueueAfter        func(key types.NamespacedName, delay time.Duration)
 
 	logger *zap.SugaredLogger
 }
@@ -61,6 +63,7 @@ var _ reconcilersecret.Interface = (*reconciler)(nil)
 
 // ReconcileKind implements Interface.ReconcileKind.
 func (r *reconciler) ReconcileKind(ctx context.Context, secret *corev1.Secret) pkgreconciler.Event {
+	// This should not happen, but it happens :) https://github.com/knative/pkg/issues/1891
 	if !r.shouldReconcile(secret) {
 		r.logger.Infof("Skipping reconciling secret %q:%q", secret.Namespace, secret.Name)
 		return nil
@@ -83,7 +86,7 @@ func (r *reconciler) ReconcileKind(ctx context.Context, secret *corev1.Secret) p
 		r.logger.Infof("CA cert invalid: %v", err)
 
 		// We need to generate a new CA cert, then shortcircuit the reconciler
-		keyPair, err := resources.CreateCACerts(ctx, expirationInterval)
+		keyPair, err := certificates.CreateCACerts(ctx, caExpirationInterval)
 		if err != nil {
 			return fmt.Errorf("cannot generate the CA cert: %v", err)
 		}
@@ -91,24 +94,33 @@ func (r *reconciler) ReconcileKind(ctx context.Context, secret *corev1.Secret) p
 	}
 
 	// Reconcile the provided secret
-	_, _, err = parseAndValidateSecret(secret, true)
+	cert, _, err := parseAndValidateSecret(secret, true)
 	if err != nil {
 		r.logger.Infof("Secret invalid: %v", err)
 
 		// Check the secret to reconcile type
 		var keyPair *certificates.KeyPair
 		if secret.Labels[r.secretTypeLabelName] == dataPlaneSecretType {
-			keyPair, err = resources.CreateDataPlaneCert(ctx, caPk, caCert, expirationInterval)
+			keyPair, err = certificates.CreateDataPlaneCert(ctx, caPk, caCert, expirationInterval)
 		} else if secret.Labels[r.secretTypeLabelName] == controlPlaneSecretType {
-			keyPair, err = resources.CreateControlPlaneCert(ctx, caPk, caCert, expirationInterval)
+			keyPair, err = certificates.CreateControlPlaneCert(ctx, caPk, caCert, expirationInterval)
 		} else {
 			return fmt.Errorf("unknown cert type: %v", r.secretTypeLabelName)
 		}
 		if err != nil {
 			return fmt.Errorf("cannot generate the cert: %v", err)
 		}
-		return r.commitUpdatedSecret(ctx, secret, keyPair, caSecret.Data[certificates.SecretCertKey])
+		err = r.commitUpdatedSecret(ctx, secret, keyPair, caSecret.Data[certificates.SecretCertKey])
+		if err != nil {
+			return err
+		}
+		cert, _, err = certificates.ParseCert(keyPair.CertBytes(), keyPair.PrivateKeyBytes())
+		if err != nil {
+			return err
+		}
 	}
+
+	r.enqueueBeforeExpiration(secret, cert)
 
 	return nil
 }
@@ -128,14 +140,22 @@ func parseAndValidateSecret(secret *corev1.Secret, shouldContainCaCert bool) (*x
 		}
 	}
 
-	caCert, caPk, err := resources.ParseCert(certBytes, pkBytes)
+	caCert, caPk, err := certificates.ParseCert(certBytes, pkBytes)
 	if err != nil {
 		return nil, nil, err
 	}
-	if err := resources.ValidateCert(caCert, rotationThreshold); err != nil {
+	if err := certificates.ValidateCert(caCert, rotationThreshold); err != nil {
 		return nil, nil, err
 	}
 	return caCert, caPk, nil
+}
+
+func (r *reconciler) enqueueBeforeExpiration(secret *corev1.Secret, cert *x509.Certificate) {
+	when := cert.NotAfter.Add(-rotationThreshold).Add(1 * time.Second) // Make sure to enqueue it after the rotation threshold
+	r.enqueueAfter(types.NamespacedName{
+		Namespace: secret.Namespace,
+		Name:      secret.Name,
+	}, when.Sub(time.Now()))
 }
 
 func (r *reconciler) commitUpdatedSecret(ctx context.Context, secret *corev1.Secret, keyPair *certificates.KeyPair, caCert []byte) error {

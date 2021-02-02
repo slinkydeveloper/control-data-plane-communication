@@ -20,15 +20,17 @@ import (
 	"context"
 
 	"github.com/kelseyhightower/envconfig"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/tools/cache"
 	kubeclient "knative.dev/pkg/client/injection/kube/client"
 	"knative.dev/pkg/client/injection/kube/reconciler/core/v1/secret"
+	"knative.dev/pkg/injection"
 	"knative.dev/pkg/system"
 
 	"knative.dev/pkg/configmap"
 	"knative.dev/pkg/controller"
 	"knative.dev/pkg/logging"
+
+	pkgreconciler "knative.dev/pkg/reconciler"
 
 	secretinformer "knative.dev/pkg/client/injection/kube/informers/core/v1/secret"
 )
@@ -38,7 +40,7 @@ const (
 	secretLabelNamePostfix = "-ctrl"
 )
 
-func NewControllerFactory(componentName string) func(ctx context.Context, cmw configmap.Watcher) *controller.Impl {
+func NewControllerFactory(componentName string) injection.ControllerConstructor {
 	return func(
 		ctx context.Context,
 		cmw configmap.Watcher,
@@ -64,26 +66,21 @@ func NewControllerFactory(componentName string) func(ctx context.Context, cmw co
 		}
 
 		impl := secret.NewImpl(ctx, r)
+		r.enqueueAfter = impl.EnqueueKeyAfter
 
 		logging.FromContext(ctx).Info("Setting up event handlers")
-
-		filterWithLabel := func(obj interface{}) bool {
-			sec := obj.(*corev1.Secret)
-			_, ok := sec.Labels[labelName]
-			return ok
-		}
 
 		// If the ca secret changes, global resync
 		secretInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
 			FilterFunc: controller.FilterWithNameAndNamespace(system.Namespace(), caSecretName),
 			Handler: controller.HandleAll(func(i interface{}) {
-				impl.FilteredGlobalResync(filterWithLabel, secretInformer.Informer())
+				impl.FilteredGlobalResync(pkgreconciler.LabelExistsFilterFunc(labelName), secretInformer.Informer())
 			}),
 		})
 
 		// Enqueue only secrets with expected label
 		secretInformer.Informer().AddEventHandler(cache.FilteringResourceEventHandler{
-			FilterFunc: filterWithLabel,
+			FilterFunc: pkgreconciler.LabelExistsFilterFunc(labelName),
 			Handler:    controller.HandleAll(impl.Enqueue),
 		})
 
