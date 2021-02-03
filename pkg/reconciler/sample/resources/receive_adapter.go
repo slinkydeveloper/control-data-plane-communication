@@ -22,10 +22,10 @@ import (
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/utils/pointer"
 	"knative.dev/pkg/kmeta"
 
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
+	"knative.dev/control-data-plane-communication/pkg/control/certificates"
 )
 
 // ReceiveAdapterArgs are the arguments needed to create a Sample Source Receive Adapter.
@@ -80,7 +80,7 @@ func MakeReceiveAdapter(args *ReceiveAdapterArgs, secret *corev1.Secret) *v1.Dep
 							}},
 							VolumeMounts: []corev1.VolumeMount{{
 								Name:      "control-secret",
-								MountPath: "/etc/secret",
+								MountPath: "/etc/control-secret",
 								ReadOnly:  true,
 							}},
 						},
@@ -89,6 +89,16 @@ func MakeReceiveAdapter(args *ReceiveAdapterArgs, secret *corev1.Secret) *v1.Dep
 						Name: "control-secret",
 						VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 							SecretName: secret.Name,
+							Items: []corev1.KeyToPath{{
+								Key:  certificates.SecretCaCertKey,
+								Path: certificates.SecretCaCertKey,
+							}, {
+								Key:  certificates.SecretCertKey,
+								Path: certificates.SecretCertKey,
+							}, {
+								Key:  certificates.SecretPKKey,
+								Path: certificates.SecretPKKey,
+							}},
 						}},
 					}},
 				},
@@ -97,20 +107,17 @@ func MakeReceiveAdapter(args *ReceiveAdapterArgs, secret *corev1.Secret) *v1.Dep
 	}
 }
 
-func MakeSecret(src *v1alpha1.SampleSource, caCert, dataPlaneSecret, dataPlaneCert []byte) *corev1.Secret {
+func MakeDataPlaneSecret(src *v1alpha1.SampleSource) *corev1.Secret {
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace: src.Namespace,
 			Name:      MakeReceiveAdapterDeploymentName(src),
+			Labels: map[string]string{
+				"sample-source-ctrl": "data-plane",
+			},
 			OwnerReferences: []metav1.OwnerReference{
 				*kmeta.NewControllerRef(src),
 			},
-		},
-		Immutable: pointer.BoolPtr(true),
-		Data: map[string][]byte{
-			"ca_cert.pem":           caCert,
-			"data_plane_secret.pem": dataPlaneSecret,
-			"data_plane_cert.pem":   dataPlaneCert,
 		},
 	}
 }

@@ -132,12 +132,8 @@ func (a *Adapter) HandleUpdateActiveStatus(ctx context.Context, msg control.Serv
 // Returns if ctx is cancelled or Send() returns an error.
 func (a *Adapter) Start(ctx context.Context) error {
 	// Start control server
-	tlsConf, err := network.LoadServerTLSConfig()
-	if err != nil {
-		logging.FromContext(ctx).Warnf("Cannot load the TLS config: %v", err)
-		return err
-	}
-	a.controlServer, _, err = network.StartControlServer(ctx, tlsConf)
+	var err error
+	a.controlServer, _, err = network.StartControlServer(ctx, network.LoadServerTLSConfigFromFile)
 	if err != nil {
 		return err
 	}

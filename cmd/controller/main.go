@@ -17,6 +17,8 @@ limitations under the License.
 package main
 
 import (
+	certificatesreconciler "knative.dev/control-data-plane-communication/pkg/control/certificates/reconciler"
+
 	// The set of controllers this controller process runs.
 	"knative.dev/control-data-plane-communication/pkg/reconciler/sample"
 
@@ -25,5 +27,9 @@ import (
 )
 
 func main() {
-	sharedmain.Main("control-data-plane-communication-controller", sample.NewController)
+	sharedmain.Main(
+		"control-data-plane-communication-controller",
+		certificatesreconciler.NewControllerFactory("sample-source"),
+		sample.NewController,
+	)
 }

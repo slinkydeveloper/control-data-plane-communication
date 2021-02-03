@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sample-source-ctrl-ca
+  namespace: knative-samples
+  labels:
+    samples.knative.dev/release: devel
+# The data is populated at install time.
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: sample-source-control-plane-cert
+  namespace: knative-samples
+  labels:
+    sample-source-ctrl: control-plane
+    samples.knative.dev/release: devel
+# The data is populated at install time.

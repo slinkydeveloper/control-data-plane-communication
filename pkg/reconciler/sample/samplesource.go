@@ -19,7 +19,6 @@ package sample
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/labels"
@@ -40,7 +39,6 @@ import (
 	"knative.dev/control-data-plane-communication/pkg/apis/samples/v1alpha1"
 	reconcilersamplesource "knative.dev/control-data-plane-communication/pkg/client/injection/reconciler/samples/v1alpha1/samplesource"
 	"knative.dev/control-data-plane-communication/pkg/control"
-	ctrlnetwork "knative.dev/control-data-plane-communication/pkg/control/network"
 	ctrlreconciler "knative.dev/control-data-plane-communication/pkg/control/reconciler"
 	ctrlsamplesource "knative.dev/control-data-plane-communication/pkg/control/samplesource"
 	ctrlservice "knative.dev/control-data-plane-communication/pkg/control/service"
@@ -56,12 +54,8 @@ type Reconciler struct {
 	sinkResolver   *resolver.URIResolver
 	configAccessor reconcilersource.ConfigAccessor
 
-	certificateManager *ctrlnetwork.CertificateManager
 	podsIpGetter       ctrlreconciler.PodIpGetter
 	controlConnections *ctrlreconciler.ControlPlaneConnectionPool
-
-	keyPairs      map[types.NamespacedName]*ctrlnetwork.KeyPair
-	keyPairsMutex sync.Mutex
 
 	activeStatusNotificationsStore *ctrlreconciler.NotificationStore
 	intervalNotificationsStore     *ctrlreconciler.NotificationStore
@@ -76,33 +70,8 @@ func (r *Reconciler) ReconcileKind(ctx context.Context, src *v1alpha1.SampleSour
 
 	ctx = sourcesv1.WithURIResolver(ctx, r.sinkResolver)
 
-	// Generate the key pair, if not existing
-	raNamespacedName := types.NamespacedName{
-		Name:      resources.MakeReceiveAdapterDeploymentName(src),
-		Namespace: src.Namespace,
-	}
-	var dataPlaneKeyPair *ctrlnetwork.KeyPair
-	if dataPlaneKeyPair, _ = r.getKeyPair(raNamespacedName); dataPlaneKeyPair == nil {
-		var err error
-		dataPlaneKeyPair, err = r.certificateManager.EmitNewDataPlaneCertificate(ctx)
-		if err != nil {
-			return err
-		}
-
-		r.keyPairsMutex.Lock()
-		r.keyPairs[raNamespacedName] = dataPlaneKeyPair
-		r.keyPairsMutex.Unlock()
-	}
-
-	logger.Infof("we have a data plane key pair")
-
 	// -- Reconcile secret
-	secret, event := r.dr.ReconcileSecret(ctx, src, resources.MakeSecret(
-		src,
-		r.certificateManager.CaCertBytes(),
-		dataPlaneKeyPair.PrivateKeyBytes(),
-		dataPlaneKeyPair.CertBytes(),
-	))
+	secret, event := r.dr.ReconcileSecret(ctx, src, resources.MakeDataPlaneSecret(src))
 	if event != nil {
 		logger.Infof("returning because event from ReconcileSecret")
 		return event
@@ -257,13 +226,6 @@ func (r *Reconciler) FinalizeKind(ctx context.Context, src *v1alpha1.SampleSourc
 	r.activeStatusNotificationsStore.CleanPodsNotifications(srcNamespacedName)
 
 	return nil
-}
-
-func (r *Reconciler) getKeyPair(name types.NamespacedName) (*ctrlnetwork.KeyPair, bool) {
-	r.keyPairsMutex.Lock()
-	defer r.keyPairsMutex.Unlock()
-	kp, ok := r.keyPairs[name]
-	return kp, ok
 }
 
 func makeSinkBinding(src *v1alpha1.SampleSource) *sourcesv1.SinkBinding {
